@@ -282,7 +282,10 @@ func (m *Monitor) deliverWebhook(url string, payload model.WebhookPayload) {
 		log.Printf("webhook marshal error: %v", err)
 		return
 	}
-	m.deliverWithRetry("webhook", url, body)
+	extraHeaders := map[string]string{
+		"X-ProxyMaze-Event": payload.Event,
+	}
+	m.deliverWithRetry("webhook", url, body, extraHeaders)
 }
 
 func (m *Monitor) deliverIntegration(ig *model.Integration, event string, alert *model.Alert) {
@@ -389,7 +392,7 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 		log.Printf("slack marshal error: %v", err)
 		return
 	}
-	m.deliverWithRetry("slack", ig.WebhookURL, body)
+	m.deliverWithRetry("slack", ig.WebhookURL, body, nil)
 }
 
 func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *model.Alert) {
@@ -429,10 +432,10 @@ func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *mod
 		log.Printf("discord marshal error: %v", err)
 		return
 	}
-	m.deliverWithRetry("discord", ig.WebhookURL, body)
+	m.deliverWithRetry("discord", ig.WebhookURL, body, nil)
 }
 
-func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
+func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHeaders map[string]string) {
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
 
@@ -454,29 +457,35 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		for k, v := range extraHeaders {
+			req.Header.Set(k, v)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("%s delivery error to %s: %v", label, endpoint, err)
+			log.Printf("%s delivery network error to %s: %v", label, endpoint, err)
 			continue
 		}
-		
+
 		statusCode := resp.StatusCode
+		// Always read and log body on non-2xx for diagnostics
+		respBody := make([]byte, 512)
+		n, _ := resp.Body.Read(respBody)
 		resp.Body.Close()
 
 		if statusCode >= 200 && statusCode < 300 {
-			log.Printf("✅ %s delivered to %s", label, endpoint)
+			log.Printf("✅ %s delivered to %s (status %d)", label, endpoint, statusCode)
 			m.store.Mu.Lock()
 			m.store.WebhookDeliveries++
 			m.store.Mu.Unlock()
 			return
 		}
 		if isTransient(statusCode) {
-			log.Printf("⚠️  %s transient failure to %s (status %d)", label, endpoint, statusCode)
+			log.Printf("⚠️  %s transient %d from %s body=%q", label, statusCode, endpoint, respBody[:n])
 			continue
 		}
 
-		log.Printf("❌ %s rejected by %s (status %d), not retrying", label, endpoint, statusCode)
+		log.Printf("❌ %s rejected %d from %s body=%q, not retrying", label, statusCode, endpoint, respBody[:n])
 		return
 	}
 	log.Printf("❌ %s max retries exceeded for %s", label, endpoint)
