@@ -2,7 +2,7 @@
 
 Continuous background monitoring service for proxy endpoints. Built for the **Torch Labs Proxy Maze 26** challenge.
 
-Zero external dependencies — pure Go standard library + `sync.RWMutex` for in-memory state.
+Uses **Redis** for sub-millisecond state access and persistence across restarts. Go standard library `net/http` for the API layer. Zero-framework architecture.
 
 ---
 
@@ -12,7 +12,7 @@ Zero external dependencies — pure Go standard library + `sync.RWMutex` for in-
 proxy-monitor/
 ├── cmd/
 │   └── server/
-│       └── main.go              # Application entrypoint
+│       └── main.go              # Application entrypoint (Redis connection, graceful shutdown)
 ├── internal/
 │   ├── handler/
 │   │   └── handler.go           # HTTP route wiring & JSON endpoint handlers
@@ -21,11 +21,14 @@ proxy-monitor/
 │   ├── monitor/
 │   │   └── monitor.go           # Background poller, prober, alert state machine, notifier
 │   └── store/
-│       └── store.go             # Thread-safe in-memory state (sync.RWMutex)
+│       ├── store.go             # Store interface (abstraction over storage backend)
+│       └── redis.go             # Redis-backed Store implementation
 ├── Dockerfile                   # Multi-stage build → distroless runtime (~5 MB)
-├── docker-compose.yml           # Production-ready compose with resource limits
+├── docker-compose.yml           # App + Redis with persistence, resource limits
 ├── .dockerignore
+├── .gitignore
 ├── go.mod
+├── go.sum
 └── README.md
 ```
 
@@ -33,22 +36,10 @@ proxy-monitor/
 
 ## Quick Start
 
-### Run locally
+### Docker (recommended)
 
 ```bash
-go run ./cmd/server
-```
-
-The server starts on `http://localhost:8080` by default. Override with `PORT`:
-
-```bash
-PORT=3000 go run ./cmd/server
-```
-
-### Docker
-
-```bash
-# Build and run
+# Build and run (app + Redis)
 docker compose up --build -d
 
 # View logs
@@ -56,7 +47,37 @@ docker compose logs -f proxy-monitor
 
 # Stop
 docker compose down
+
+# Stop and remove data
+docker compose down -v
 ```
+
+### Run locally
+
+Requires a running Redis instance:
+
+```bash
+# Start Redis (if not using Docker)
+redis-server
+
+# Run the app
+REDIS_URL=redis://localhost:6379 go run ./cmd/server
+```
+
+The server starts on `http://localhost:8080` by default. Override with `PORT`:
+
+```bash
+PORT=3000 REDIS_URL=redis://localhost:6379 go run ./cmd/server
+```
+
+---
+
+## Environment Variables
+
+| Variable    | Default                  | Description                       |
+|-------------|--------------------------|-----------------------------------|
+| `PORT`      | `8080`                   | HTTP server port                  |
+| `REDIS_URL` | `redis://localhost:6379`  | Redis connection URL              |
 
 ---
 
@@ -158,45 +179,65 @@ Returns: `total_checks`, `total_proxies`, `proxies_up`, `proxies_down`, `proxies
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│                  HTTP API                    │
-│            (internal/handler)                │
-├─────────────────────────────────────────────┤
-│                                             │
-│   ┌──────────┐         ┌──────────────┐     │
-│   │  Store    │◄────────│   Monitor    │     │
-│   │ (RWMutex)│         │  (Poller +   │     │
-│   │          │         │   Alerter +  │     │
-│   │ proxies  │         │   Notifier)  │     │
-│   │ alerts   │         │              │     │
-│   │ webhooks │         │  goroutine   │     │
-│   └──────────┘         └──────┬───────┘     │
-│                               │              │
-│                       ┌───────▼───────┐      │
-│                       │  HTTP Probes  │      │
-│                       │  (concurrent) │      │
-│                       └───────────────┘      │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│                   HTTP API                       │
+│              (internal/handler)                  │
+├─────────────────────────────────────────────────┤
+│                                                  │
+│   ┌──────────────┐       ┌──────────────┐        │
+│   │ Store (iface) │◄──────│   Monitor    │        │
+│   │               │       │  (Poller +   │        │
+│   │  GetProxy()   │       │   Alerter +  │        │
+│   │  SetProxy()   │       │   Notifier)  │        │
+│   │  AddAlert()   │       │              │        │
+│   │  ...          │       │  goroutine   │        │
+│   └──────┬───────┘       └──────┬───────┘        │
+│          │                       │                │
+│   ┌──────▼───────┐       ┌──────▼───────┐        │
+│   │    Redis 7    │       │ HTTP Probes  │        │
+│   │  (AOF + LRU)  │       │ (concurrent) │        │
+│   └───────────────┘       └──────────────┘        │
+└─────────────────────────────────────────────────┘
 ```
 
-- **Store**: Single `sync.RWMutex`-guarded struct. All state is in-memory.
+- **Store interface**: Decouples handler/monitor from storage. Currently backed by Redis; swappable for testing.
+- **Redis**: JSON values with SET/GET, Lists for history (O(1) append), Sets for ID indexes, pipelines for batch reads.
 - **Monitor**: Background goroutine ticking at `check_interval_seconds`. Probes all proxies concurrently, then evaluates the global alert threshold.
-- **Handler**: Stateless HTTP handlers reading/writing through the store.
+- **Handler**: Stateless HTTP handlers reading/writing through the Store interface.
+
+### Redis Key Layout
+
+| Key Pattern              | Type   | Purpose                        |
+|--------------------------|--------|--------------------------------|
+| `config`                 | String | JSON config blob               |
+| `proxies`                | Set    | All proxy IDs                  |
+| `proxy:{id}`             | String | JSON proxy metadata            |
+| `proxy:{id}:history`     | List   | Probe results (chronological)  |
+| `alerts`                 | List   | Alert IDs (chronological)      |
+| `alert:{id}`             | String | JSON alert blob                |
+| `active_alert_id`        | String | Current active alert ID        |
+| `webhooks`               | Set    | All webhook IDs                |
+| `webhook:{id}`           | String | JSON webhook blob              |
+| `integrations`           | Set    | All integration IDs            |
+| `integration:{id}`       | String | JSON integration blob          |
 
 ---
 
 ## Docker Details
 
-| Feature            | Detail                                    |
-|--------------------|-------------------------------------------|
-| Base image         | `gcr.io/distroless/static-debian12`       |
-| Final image size   | ~5 MB                                     |
-| User               | `nonroot` (UID 65534)                     |
-| Filesystem         | Read-only                                 |
-| Memory limit       | 128 MB (32 MB reserved)                   |
-| CPU limit          | 0.50 cores (0.10 reserved)                |
-| Log rotation       | 3 × 10 MB JSON files                     |
-| Restart policy     | `unless-stopped`                          |
+| Component        | Image                                 | Details                         |
+|------------------|---------------------------------------|---------------------------------|
+| **App**          | `gcr.io/distroless/static-debian12`   | ~5 MB, nonroot, read-only FS   |
+| **Redis**        | `redis:7-alpine`                      | AOF persistence, 64 MB limit   |
+
+| Feature            | App                    | Redis                   |
+|--------------------|------------------------|-------------------------|
+| Memory limit       | 128 MB                 | 128 MB                  |
+| CPU limit          | 0.50 cores             | 0.25 cores              |
+| Persistence        | Stateless              | AOF + named volume      |
+| Log rotation       | 3 × 10 MB              | 3 × 5 MB               |
+| Restart policy     | `unless-stopped`       | `unless-stopped`        |
+| Health check       | –                      | `redis-cli ping`        |
 
 ---
 

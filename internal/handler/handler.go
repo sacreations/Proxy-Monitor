@@ -16,7 +16,7 @@ import (
 )
 
 // NewRouter creates and returns a fully wired http.Handler.
-func NewRouter(s *store.Store, mon *monitor.Monitor) http.Handler {
+func NewRouter(s store.Store, mon *monitor.Monitor) http.Handler {
 	h := &handlers{store: s, monitor: mon}
 
 	mux := http.NewServeMux()
@@ -48,7 +48,7 @@ func NewRouter(s *store.Store, mon *monitor.Monitor) http.Handler {
 // ---------------------------------------------------------------------------
 
 type handlers struct {
-	store   *store.Store
+	store   store.Store
 	monitor *monitor.Monitor
 }
 
@@ -119,10 +119,10 @@ func (h *handlers) configSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.store.Mu.Lock()
-	h.store.Config.CheckIntervalSeconds = input.CheckIntervalSeconds
-	h.store.Config.RequestTimeoutMs = input.RequestTimeoutMs
-	h.store.Mu.Unlock()
+	if err := h.store.SetConfig(&input); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
+		return
+	}
 
 	h.monitor.Restart()
 
@@ -134,9 +134,11 @@ func (h *handlers) configSet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) configGet(w http.ResponseWriter, _ *http.Request) {
-	h.store.Mu.RLock()
-	cfg := *h.store.Config
-	h.store.Mu.RUnlock()
+	cfg, err := h.store.GetConfig()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to read config: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -157,9 +159,12 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 
-	h.store.Mu.Lock()
+	// If replace is true, clear the existing proxy pool.
 	if input.Replace {
-		h.store.Proxies = make(map[string]*model.Proxy)
+		if _, err := h.store.DeleteAllProxies(); err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to clear proxies: "+err.Error())
+			return
+		}
 	}
 
 	var created []*model.Proxy
@@ -169,8 +174,14 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		id := extractProxyID(u)
-		if _, exists := h.store.Proxies[id]; exists {
-			continue
+		// Check if already exists.
+		existing, err := h.store.GetProxy(id)
+		if err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to check proxy: "+err.Error())
+			return
+		}
+		if existing != nil {
+			continue // deduplicate
 		}
 		p := &model.Proxy{
 			ID:        id,
@@ -180,10 +191,12 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 			UpdatedAt: now,
 			History:   []model.ProbeResult{},
 		}
-		h.store.Proxies[id] = p
+		if err := h.store.SetProxy(p); err != nil {
+			errResp(w, http.StatusInternalServerError, "failed to save proxy: "+err.Error())
+			return
+		}
 		created = append(created, p)
 	}
-	h.store.Mu.Unlock()
 
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"message": fmt.Sprintf("ingested %d new proxies", len(created)),
@@ -192,11 +205,14 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) proxiesList(w http.ResponseWriter, _ *http.Request) {
-	h.store.Mu.RLock()
-	proxies := make([]*model.Proxy, 0, len(h.store.Proxies))
+	proxies, err := h.store.GetAllProxies()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to list proxies: "+err.Error())
+		return
+	}
+
 	up, down := 0, 0
-	for _, p := range h.store.Proxies {
-		proxies = append(proxies, p)
+	for _, p := range proxies {
 		switch p.Status {
 		case model.StatusUp:
 			up++
@@ -205,7 +221,6 @@ func (h *handlers) proxiesList(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 	total := len(proxies)
-	h.store.Mu.RUnlock()
 
 	var failureRate float64
 	if total > 0 {
@@ -224,11 +239,12 @@ func (h *handlers) proxiesList(w http.ResponseWriter, _ *http.Request) {
 func (h *handlers) proxyGet(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	h.store.Mu.RLock()
-	p, ok := h.store.Proxies[id]
-	h.store.Mu.RUnlock()
-
-	if !ok {
+	p, err := h.store.GetProxy(id)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to get proxy: "+err.Error())
+		return
+	}
+	if p == nil {
 		errResp(w, http.StatusNotFound, "proxy not found: "+id)
 		return
 	}
@@ -250,23 +266,32 @@ func (h *handlers) proxyGet(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) proxyHistory(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	h.store.Mu.RLock()
-	p, ok := h.store.Proxies[id]
-	h.store.Mu.RUnlock()
-
-	if !ok {
+	p, err := h.store.GetProxy(id)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to get proxy: "+err.Error())
+		return
+	}
+	if p == nil {
 		errResp(w, http.StatusNotFound, "proxy not found: "+id)
 		return
 	}
-	writeJSON(w, http.StatusOK, p.History)
+
+	history, err := h.store.GetHistory(id)
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to get history: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, history)
 }
 
+// handleProxiesDelete clears the proxy pool but does NOT delete alert history.
 func (h *handlers) proxiesDelete(w http.ResponseWriter, _ *http.Request) {
-	h.store.Mu.Lock()
-	count := len(h.store.Proxies)
-	h.store.Proxies = make(map[string]*model.Proxy)
-	h.store.ActiveAlertID = ""
-	h.store.Mu.Unlock()
+	count, err := h.store.DeleteAllProxies()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to delete proxies: "+err.Error())
+		return
+	}
+	_ = h.store.ClearActiveAlertID()
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"message":         "proxy pool cleared",
@@ -279,11 +304,11 @@ func (h *handlers) proxiesDelete(w http.ResponseWriter, _ *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *handlers) alertsList(w http.ResponseWriter, _ *http.Request) {
-	h.store.Mu.RLock()
-	alerts := make([]*model.Alert, len(h.store.Alerts))
-	copy(alerts, h.store.Alerts)
-	h.store.Mu.RUnlock()
-
+	alerts, err := h.store.GetAllAlerts()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to list alerts: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, alerts)
 }
 
@@ -305,9 +330,10 @@ func (h *handlers) webhookCreate(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("wh_%d", time.Now().UnixNano())
 	wh := &model.Webhook{ID: id, URL: input.URL}
 
-	h.store.Mu.Lock()
-	h.store.Webhooks[id] = wh
-	h.store.Mu.Unlock()
+	if err := h.store.AddWebhook(wh); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save webhook: "+err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, wh)
 }
@@ -334,9 +360,10 @@ func (h *handlers) integrationCreate(w http.ResponseWriter, r *http.Request) {
 	id := fmt.Sprintf("int_%d", time.Now().UnixNano())
 	ig := &model.Integration{ID: id, Type: input.Type, Endpoint: input.Endpoint}
 
-	h.store.Mu.Lock()
-	h.store.Integrations[id] = ig
-	h.store.Mu.Unlock()
+	if err := h.store.AddIntegration(ig); err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to save integration: "+err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, ig)
 }
@@ -346,11 +373,15 @@ func (h *handlers) integrationCreate(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 func (h *handlers) metrics(w http.ResponseWriter, _ *http.Request) {
-	h.store.Mu.RLock()
+	proxies, err := h.store.GetAllProxies()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to read proxies: "+err.Error())
+		return
+	}
 
 	totalChecks := 0
 	up, down, pending := 0, 0, 0
-	for _, p := range h.store.Proxies {
+	for _, p := range proxies {
 		totalChecks += p.TotalChecks
 		switch p.Status {
 		case model.StatusUp:
@@ -362,9 +393,16 @@ func (h *handlers) metrics(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	totalProxies := len(h.store.Proxies)
+	totalProxies := len(proxies)
+
+	alerts, err := h.store.GetAllAlerts()
+	if err != nil {
+		errResp(w, http.StatusInternalServerError, "failed to read alerts: "+err.Error())
+		return
+	}
+
 	activeAlerts, resolvedAlerts := 0, 0
-	for _, a := range h.store.Alerts {
+	for _, a := range alerts {
 		switch a.Status {
 		case model.AlertActive:
 			activeAlerts++
@@ -372,6 +410,8 @@ func (h *handlers) metrics(w http.ResponseWriter, _ *http.Request) {
 			resolvedAlerts++
 		}
 	}
+
+	webhooks, _ := h.store.GetAllWebhooks()
 
 	var failureRate float64
 	if totalProxies > 0 {
@@ -386,11 +426,10 @@ func (h *handlers) metrics(w http.ResponseWriter, _ *http.Request) {
 		ProxiesPending: pending,
 		ActiveAlerts:   activeAlerts,
 		ResolvedAlerts: resolvedAlerts,
-		TotalAlerts:    len(h.store.Alerts),
+		TotalAlerts:    len(alerts),
 		FailureRate:    failureRate,
-		WebhookCount:   len(h.store.Webhooks),
+		WebhookCount:   len(webhooks),
 	}
-	h.store.Mu.RUnlock()
 
 	writeJSON(w, http.StatusOK, m)
 }
