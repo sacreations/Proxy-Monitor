@@ -1,0 +1,28 @@
+services:
+  proxy-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: proxy-monitor
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - PORT=8080
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.50"
+        reservations:
+          memory: 32M
+          cpus: "0.10"
+    # Distroless has no shell/curl/wget. Use Docker's built-in TCP check
+    # or add a /healthz flag to the binary in a future iteration.
+    # For now, rely on restart: unless-stopped + port binding.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    read_only: true

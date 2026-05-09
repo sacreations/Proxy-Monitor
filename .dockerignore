@@ -1,0 +1,33 @@
+# Binaries
+proxy-monitor
+proxy-monitor.exe
+
+# Build artifacts
+/bin/
+/dist/
+
+# IDE & editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+.editorconfig
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Git
+.git/
+.gitignore
+
+# Docs & misc (not needed in build context)
+*.md
+*.pdf
+LICENSE
+.dockerignore
+docker-compose.yml
+.env
+.env.*
