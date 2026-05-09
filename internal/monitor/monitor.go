@@ -451,7 +451,7 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHea
 			}
 		}
 
-		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(body))
 		if err != nil {
 			log.Printf("failed to create request: %v", err)
 			return
