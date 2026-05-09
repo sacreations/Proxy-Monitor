@@ -341,19 +341,19 @@ async function refresh(){
   const [metrics,proxiesData,alerts,config]=await Promise.all([
     api('/metrics'),api('/proxies'),api('/alerts'),api('/config')
   ]);
-  if(metrics)renderStats(metrics);
+  if(metrics && proxiesData)renderStats(metrics, proxiesData);
   if(proxiesData)renderProxies(proxiesData);
   if(alerts)renderAlerts(Array.isArray(alerts)?alerts:[]);
   if(config){$('cfg-interval').value=config.check_interval_seconds;$('cfg-timeout').value=config.request_timeout_ms;}
 }
 
-function renderStats(m){
-  const fr=(m.failure_rate*100).toFixed(1);
-  const frClass=m.failure_rate>=0.2?'down':m.failure_rate>0?'warn':'up';
+function renderStats(m, p){
+  const fr=(p.failure_rate*100).toFixed(1);
+  const frClass=p.failure_rate>=0.2?'down':p.failure_rate>0?'warn':'up';
   $('stats').innerHTML=`
-    <div class="stat-card"><div class="label">Total Proxies</div><div class="value">${m.total_proxies}</div></div>
-    <div class="stat-card"><div class="label">Proxies Up</div><div class="value up">${m.proxies_up}</div></div>
-    <div class="stat-card"><div class="label">Proxies Down</div><div class="value down">${m.proxies_down}</div></div>
+    <div class="stat-card"><div class="label">Total Proxies</div><div class="value">${p.total}</div></div>
+    <div class="stat-card"><div class="label">Proxies Up</div><div class="value up">${p.up}</div></div>
+    <div class="stat-card"><div class="label">Proxies Down</div><div class="value down">${p.down}</div></div>
     <div class="stat-card"><div class="label">Failure Rate</div><div class="value ${frClass}">${fr}%</div></div>
     <div class="stat-card"><div class="label">Total Checks</div><div class="value">${m.total_checks}</div></div>
     <div class="stat-card"><div class="label">Active Alerts</div><div class="value ${m.active_alerts>0?'down':''}">${m.active_alerts}</div></div>
