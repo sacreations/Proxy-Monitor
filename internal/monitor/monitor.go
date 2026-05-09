@@ -311,7 +311,7 @@ func (m *Monitor) deliverIntegration(ig *model.Integration, event string, alert 
 // ---------------------------------------------------------------------------
 
 func isTransient(code int) bool {
-	return code == 500 || code == 502 || code == 503 || code == 504
+	return code == 429 || code == 500 || code == 502 || code == 503 || code == 504
 }
 
 func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model.Alert) {
@@ -397,7 +397,9 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
 
-	for attempt := 0; ; attempt++ {
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	for attempt := 0; attempt < 10; attempt++ {
 		if attempt > 0 {
 			log.Printf("%s retry #%d to %s (backoff %v)", label, attempt, endpoint, backoff)
 			time.Sleep(backoff)
@@ -407,7 +409,14 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
 			}
 		}
 
-		resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			log.Printf("failed to create request: %v", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
 		if err != nil {
 			log.Printf("%s delivery error to %s: %v", label, endpoint, err)
 			continue
@@ -431,4 +440,5 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
 		log.Printf("❌ %s rejected by %s (status %d), not retrying", label, endpoint, statusCode)
 		return
 	}
+	log.Printf("❌ %s max retries exceeded for %s", label, endpoint)
 }
