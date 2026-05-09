@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -329,9 +330,9 @@ func isTransient(code int) bool {
 }
 
 func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model.Alert) {
-	emoji := "🚨"
+	color := "#e74c3c"
 	if event == model.EventAlertResolved {
-		emoji = "✅"
+		color = "#2ecc71"
 	}
 
 	username := ig.Username
@@ -339,38 +340,30 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 		username = "ProxyWatch"
 	}
 
-	// Block Kit ONLY — do not mix blocks + attachments (evaluator validates blocks format)
+	emoji := "🚨"
+	if event == model.EventAlertResolved {
+		emoji = "✅"
+	}
+
+	// Spec: username, text, attachments[0].{color, fields, footer, ts}
+	// Field titles must include (case-insensitive): Alert ID, Failure Rate,
+	// Failed Proxies, Threshold, Failed IDs, Fired At
 	slack := model.SlackPayload{
 		Username: username,
 		Text:     fmt.Sprintf("%s Proxy Monitor Alert — %s", emoji, event),
-		Blocks: []any{
-			map[string]any{
-				"type": "header",
-				"text": map[string]any{
-					"type":  "plain_text",
-					"text":  fmt.Sprintf("%s %s", emoji, alert.Message),
-					"emoji": true,
+		Attachments: []model.SlackAttachment{
+			{
+				Color: color,
+				Fields: []model.SlackField{
+					{Title: "Alert ID", Value: alert.AlertID, Short: true},
+					{Title: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Short: true},
+					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Short: true},
+					{Title: "Threshold", Value: fmt.Sprintf("%.0f%%", alert.Threshold*100), Short: true},
+					{Title: "Failed IDs", Value: strings.Join(alert.FailedProxyIDs, ", "), Short: false},
+					{Title: "Fired At", Value: alert.FiredAt.UTC().Format(time.RFC3339), Short: true},
 				},
-			},
-			map[string]any{
-				"type": "section",
-				"fields": []map[string]any{
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Alert ID*\n%s", alert.AlertID)},
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Status*\n%s", alert.Status)},
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Failure Rate*\n%.2f%%", alert.FailureRate*100)},
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Failed Proxies*\n%d / %d", alert.FailedProxies, alert.TotalProxies)},
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Threshold*\n%.0f%%", alert.Threshold*100)},
-					{"type": "mrkdwn", "text": fmt.Sprintf("*Event*\n%s", event)},
-				},
-			},
-			map[string]any{
-				"type": "divider",
-			},
-			map[string]any{
-				"type": "context",
-				"elements": []map[string]any{
-					{"type": "mrkdwn", "text": fmt.Sprintf("ProxyMaze Background Monitor • Fired: %s", alert.FiredAt.Format(time.RFC3339))},
-				},
+				Footer: "ProxyMaze Background Monitor",
+				Ts:     alert.FiredAt.Unix(),
 			},
 		},
 	}
@@ -395,7 +388,9 @@ func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *mod
 		username = "ProxyWatch"
 	}
 
-	// Embeds-only payload — no content field (evaluator validates embed structure)
+	// Spec: embeds[0].{title, description, color, fields, footer.text}
+	// Field names must include (case-insensitive): Alert ID, Failure Rate,
+	// Failed Proxies, Threshold, Failed IDs
 	discord := model.DiscordPayload{
 		Username: username,
 		Embeds: []model.DiscordEmbed{
@@ -405,11 +400,10 @@ func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *mod
 				Color:       color,
 				Fields: []model.DiscordEmbedField{
 					{Name: "Alert ID", Value: alert.AlertID, Inline: true},
-					{Name: "Status", Value: alert.Status, Inline: true},
 					{Name: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Inline: true},
 					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Inline: true},
 					{Name: "Threshold", Value: fmt.Sprintf("%.0f%%", alert.Threshold*100), Inline: true},
-					{Name: "Event", Value: event, Inline: true},
+					{Name: "Failed IDs", Value: strings.Join(alert.FailedProxyIDs, ", "), Inline: false},
 				},
 				Footer:    &model.DiscordFooter{Text: "ProxyMaze Background Monitor"},
 				Timestamp: alert.FiredAt.UTC().Format(time.RFC3339),
