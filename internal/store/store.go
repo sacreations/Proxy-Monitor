@@ -1,34 +1,48 @@
-// Package store provides the thread-safe, in-memory state for the proxy
-// monitor service. All mutations go through the exported Store methods which
-// hold the appropriate lock.
+// Package store defines the Store interface and provides a Redis-backed
+// implementation for the proxy monitor service.
 package store
 
 import (
-	"sync"
-
 	"proxy-monitor/internal/model"
 )
 
-// Store is the central thread-safe in-memory state for the entire application.
-type Store struct {
-	Mu            sync.RWMutex
-	Config        *model.Config
-	Proxies       map[string]*model.Proxy
-	Alerts        []*model.Alert
-	AlertsByID    map[string]*model.Alert
-	ActiveAlertID string
-	Webhooks      map[string]*model.Webhook
-	Integrations  map[string]*model.Integration
-}
+// Store is the abstraction over all state management. Both the handler
+// and monitor packages depend only on this interface, making the storage
+// backend swappable (Redis, in-memory, etc.).
+type Store interface {
+	// ── Config ─────────────────────────────────────────────────────────
+	GetConfig() (*model.Config, error)
+	SetConfig(cfg *model.Config) error
 
-// New creates and returns an initialised Store with sensible defaults.
-func New() *Store {
-	return &Store{
-		Config:       &model.Config{CheckIntervalSeconds: 30, RequestTimeoutMs: 5000},
-		Proxies:      make(map[string]*model.Proxy),
-		Alerts:       make([]*model.Alert, 0),
-		AlertsByID:   make(map[string]*model.Alert),
-		Webhooks:     make(map[string]*model.Webhook),
-		Integrations: make(map[string]*model.Integration),
-	}
+	// ── Proxies ────────────────────────────────────────────────────────
+	GetProxy(id string) (*model.Proxy, error)
+	SetProxy(p *model.Proxy) error
+	GetAllProxies() ([]*model.Proxy, error)
+	GetAllProxyIDs() ([]string, error)
+	DeleteAllProxies() (int, error)
+
+	// ── Proxy History ──────────────────────────────────────────────────
+	AppendHistory(proxyID string, result model.ProbeResult) error
+	GetHistory(proxyID string) ([]model.ProbeResult, error)
+
+	// ── Alerts ─────────────────────────────────────────────────────────
+	AddAlert(a *model.Alert) error
+	GetAlert(id string) (*model.Alert, error)
+	UpdateAlert(a *model.Alert) error
+	GetAllAlerts() ([]*model.Alert, error)
+	GetActiveAlertID() (string, error)
+	SetActiveAlertID(id string) error
+	ClearActiveAlertID() error
+
+	// ── Webhooks ───────────────────────────────────────────────────────
+	AddWebhook(wh *model.Webhook) error
+	GetAllWebhooks() ([]*model.Webhook, error)
+
+	// ── Integrations ───────────────────────────────────────────────────
+	AddIntegration(ig *model.Integration) error
+	GetAllIntegrations() ([]*model.Integration, error)
+
+	// ── Lifecycle ──────────────────────────────────────────────────────
+	Ping() error
+	Close() error
 }

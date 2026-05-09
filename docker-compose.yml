@@ -1,4 +1,32 @@
 services:
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: proxy-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # ── Proxy Monitor ──────────────────────────────────────────────────────────
   proxy-monitor:
     build:
       context: .
@@ -8,6 +36,10 @@ services:
       - "${PORT:-8080}:8080"
     environment:
       - PORT=8080
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -17,12 +49,13 @@ services:
         reservations:
           memory: 32M
           cpus: "0.10"
-    # Distroless has no shell/curl/wget. Use Docker's built-in TCP check
-    # or add a /healthz flag to the binary in a future iteration.
-    # For now, rely on restart: unless-stopped + port binding.
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
     read_only: true
+
+volumes:
+  redis-data:
+    driver: local

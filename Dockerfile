@@ -1,12 +1,12 @@
 # ─── Build stage ────────────────────────────────────────────────────────────
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 RUN apk add --no-cache ca-certificates git
 
 WORKDIR /src
 
-# Cache dependency layer (go.mod only — zero deps, but good practice).
-COPY go.mod ./
+# Cache dependency layer.
+COPY go.mod go.sum ./
 RUN go mod download
 
 # Copy source and build a fully static binary.
@@ -18,8 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.title="proxy-monitor" \
-      org.opencontainers.image.description="Continuous background proxy monitoring service" \
-      org.opencontainers.image.source="https://github.com/your-org/proxy-monitor"
+      org.opencontainers.image.description="Continuous background proxy monitoring service"
 
 COPY --from=builder /bin/proxy-monitor /proxy-monitor
 

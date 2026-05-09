@@ -19,12 +19,12 @@ import (
 
 // Monitor encapsulates the background poller and alert evaluator.
 type Monitor struct {
-	store   *store.Store
+	store   store.Store
 	restart chan struct{}
 }
 
 // New creates a Monitor bound to the given store.
-func New(s *store.Store) *Monitor {
+func New(s store.Store) *Monitor {
 	return &Monitor{
 		store:   s,
 		restart: make(chan struct{}, 1),
@@ -46,9 +46,13 @@ func (m *Monitor) Restart() {
 // Run starts the continuous polling loop. Blocks forever — call in a goroutine.
 func (m *Monitor) Run() {
 	for {
-		m.store.Mu.RLock()
-		interval := time.Duration(m.store.Config.CheckIntervalSeconds) * time.Second
-		m.store.Mu.RUnlock()
+		cfg, err := m.store.GetConfig()
+		if err != nil {
+			log.Printf("poller: failed to read config: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		interval := time.Duration(cfg.CheckIntervalSeconds) * time.Second
 
 		log.Printf("⏱️  poller started with interval %v", interval)
 		ticker := time.NewTicker(interval)
@@ -70,20 +74,23 @@ func (m *Monitor) Run() {
 
 // runCycle probes every proxy concurrently, then evaluates alerts.
 func (m *Monitor) runCycle() {
-	m.store.Mu.RLock()
-	ids := make([]string, 0, len(m.store.Proxies))
-	for id := range m.store.Proxies {
-		ids = append(ids, id)
+	ids, err := m.store.GetAllProxyIDs()
+	if err != nil {
+		log.Printf("poll cycle: failed to get proxy IDs: %v", err)
+		return
 	}
-	timeoutMs := m.store.Config.RequestTimeoutMs
-	m.store.Mu.RUnlock()
-
 	if len(ids) == 0 {
 		return
 	}
 
+	cfg, err := m.store.GetConfig()
+	if err != nil {
+		log.Printf("poll cycle: failed to get config: %v", err)
+		return
+	}
+	timeout := time.Duration(cfg.RequestTimeoutMs) * time.Millisecond
+
 	log.Printf("🔍 polling %d proxies", len(ids))
-	timeout := time.Duration(timeoutMs) * time.Millisecond
 
 	var wg sync.WaitGroup
 	for _, id := range ids {
@@ -103,14 +110,11 @@ func (m *Monitor) runCycle() {
 // ---------------------------------------------------------------------------
 
 func (m *Monitor) probe(proxyID string, timeout time.Duration) {
-	m.store.Mu.RLock()
-	p, ok := m.store.Proxies[proxyID]
-	if !ok {
-		m.store.Mu.RUnlock()
+	p, err := m.store.GetProxy(proxyID)
+	if err != nil || p == nil {
 		return
 	}
 	proxyURL := p.URL
-	m.store.Mu.RUnlock()
 
 	client := &http.Client{Timeout: timeout}
 	start := time.Now()
@@ -139,35 +143,48 @@ func (m *Monitor) probe(proxyID string, timeout time.Duration) {
 		}
 	}
 
-	now := result.Timestamp
-	m.store.Mu.Lock()
-	p, ok = m.store.Proxies[proxyID]
-	if ok {
-		p.History = append(p.History, result)
-		p.Status = result.Result
-		p.LastCheckedAt = &now
-		p.UpdatedAt = now
-		p.TotalChecks = len(p.History)
-
-		upCount := 0
-		for _, h := range p.History {
-			if h.Result == model.StatusUp {
-				upCount++
-			}
-		}
-		p.UptimePercentage = float64(upCount) / float64(p.TotalChecks) * 100.0
-
-		consec := 0
-		for i := len(p.History) - 1; i >= 0; i-- {
-			if p.History[i].Result == model.StatusDown {
-				consec++
-			} else {
-				break
-			}
-		}
-		p.ConsecutiveFailures = consec
+	// Append history to Redis.
+	if err := m.store.AppendHistory(proxyID, result); err != nil {
+		log.Printf("probe: failed to append history for %s: %v", proxyID, err)
 	}
-	m.store.Mu.Unlock()
+
+	// Update proxy metadata.
+	now := result.Timestamp
+	p.Status = result.Result
+	p.LastCheckedAt = &now
+	p.UpdatedAt = now
+
+	// Recount from stored history for accuracy.
+	history, err := m.store.GetHistory(proxyID)
+	if err != nil {
+		log.Printf("probe: failed to get history for %s: %v", proxyID, err)
+		return
+	}
+	p.TotalChecks = len(history)
+
+	upCount := 0
+	for _, h := range history {
+		if h.Result == model.StatusUp {
+			upCount++
+		}
+	}
+	if p.TotalChecks > 0 {
+		p.UptimePercentage = float64(upCount) / float64(p.TotalChecks) * 100.0
+	}
+
+	consec := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Result == model.StatusDown {
+			consec++
+		} else {
+			break
+		}
+	}
+	p.ConsecutiveFailures = consec
+
+	if err := m.store.SetProxy(p); err != nil {
+		log.Printf("probe: failed to update proxy %s: %v", proxyID, err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -175,17 +192,20 @@ func (m *Monitor) probe(proxyID string, timeout time.Duration) {
 // ---------------------------------------------------------------------------
 
 func (m *Monitor) evaluateGlobalAlert() {
-	m.store.Mu.Lock()
-	defer m.store.Mu.Unlock()
+	proxies, err := m.store.GetAllProxies()
+	if err != nil {
+		log.Printf("alert eval: failed to get proxies: %v", err)
+		return
+	}
 
-	total := len(m.store.Proxies)
+	total := len(proxies)
 	if total == 0 {
 		return
 	}
 
 	downCount := 0
 	failedIDs := make([]string, 0)
-	for _, p := range m.store.Proxies {
+	for _, p := range proxies {
 		if p.Status == model.StatusDown {
 			downCount++
 			failedIDs = append(failedIDs, p.ID)
@@ -193,8 +213,10 @@ func (m *Monitor) evaluateGlobalAlert() {
 	}
 	failureRate := float64(downCount) / float64(total)
 
+	activeAlertID, _ := m.store.GetActiveAlertID()
+
 	if failureRate >= model.FailureThreshold {
-		if m.store.ActiveAlertID == "" {
+		if activeAlertID == "" {
 			alertID := generateAlertID()
 			now := time.Now().UTC()
 			alert := &model.Alert{
@@ -208,22 +230,31 @@ func (m *Monitor) evaluateGlobalAlert() {
 				FiredAt:        now,
 				Message:        fmt.Sprintf("failure rate %.2f%% >= %.2f%% threshold", failureRate*100, model.FailureThreshold*100),
 			}
-			m.store.Alerts = append(m.store.Alerts, alert)
-			m.store.AlertsByID[alertID] = alert
-			m.store.ActiveAlertID = alertID
+			if err := m.store.AddAlert(alert); err != nil {
+				log.Printf("alert eval: failed to add alert: %v", err)
+				return
+			}
+			if err := m.store.SetActiveAlertID(alertID); err != nil {
+				log.Printf("alert eval: failed to set active alert: %v", err)
+				return
+			}
 			log.Printf("🚨 ALERT FIRED alert=%s rate=%.2f%%", alertID, failureRate*100)
 			go m.dispatchNotifications(model.EventAlertFired, alert)
 		} else {
-			if a, ok := m.store.AlertsByID[m.store.ActiveAlertID]; ok {
+			// Update existing active alert stats.
+			a, err := m.store.GetAlert(activeAlertID)
+			if err == nil && a != nil {
 				a.FailureRate = failureRate
 				a.TotalProxies = total
 				a.FailedProxies = downCount
 				a.FailedProxyIDs = failedIDs
+				_ = m.store.UpdateAlert(a)
 			}
 		}
 	} else {
-		if m.store.ActiveAlertID != "" {
-			if a, ok := m.store.AlertsByID[m.store.ActiveAlertID]; ok {
+		if activeAlertID != "" {
+			a, err := m.store.GetAlert(activeAlertID)
+			if err == nil && a != nil {
 				now := time.Now().UTC()
 				a.Status = model.AlertResolved
 				a.FailureRate = failureRate
@@ -231,10 +262,11 @@ func (m *Monitor) evaluateGlobalAlert() {
 				a.FailedProxies = downCount
 				a.FailedProxyIDs = failedIDs
 				a.ResolvedAt = &now
-				log.Printf("✅ ALERT RESOLVED alert=%s rate=%.2f%%", m.store.ActiveAlertID, failureRate*100)
+				_ = m.store.UpdateAlert(a)
+				log.Printf("✅ ALERT RESOLVED alert=%s rate=%.2f%%", activeAlertID, failureRate*100)
 				go m.dispatchNotifications(model.EventAlertResolved, a)
 			}
-			m.store.ActiveAlertID = ""
+			_ = m.store.ClearActiveAlertID()
 		}
 	}
 }
@@ -250,16 +282,8 @@ func generateAlertID() string {
 // ---------------------------------------------------------------------------
 
 func (m *Monitor) dispatchNotifications(event string, alert *model.Alert) {
-	m.store.Mu.RLock()
-	webhooks := make([]*model.Webhook, 0, len(m.store.Webhooks))
-	for _, wh := range m.store.Webhooks {
-		webhooks = append(webhooks, wh)
-	}
-	integrations := make([]*model.Integration, 0, len(m.store.Integrations))
-	for _, ig := range m.store.Integrations {
-		integrations = append(integrations, ig)
-	}
-	m.store.Mu.RUnlock()
+	webhooks, _ := m.store.GetAllWebhooks()
+	integrations, _ := m.store.GetAllIntegrations()
 
 	payload := model.WebhookPayload{
 		Event:          event,
