@@ -450,11 +450,19 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHea
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Do NOT auto-follow redirects — Go converts POST→GET on 301/302 which causes 405.
+	// We handle redirects manually to always preserve POST.
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 
+	currentURL := endpoint
 	for attempt := 0; attempt < 10; attempt++ {
 		if attempt > 0 {
-			log.Printf("%s retry #%d to %s (backoff %v)", label, attempt, endpoint, backoff)
+			log.Printf("%s retry #%d to %s (backoff %v)", label, attempt, currentURL, backoff)
 			time.Sleep(backoff)
 			backoff *= 2
 			if backoff > maxBackoff {
@@ -462,9 +470,9 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHea
 			}
 		}
 
-		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, currentURL, bytes.NewReader(body))
 		if err != nil {
-			log.Printf("failed to create request: %v", err)
+			log.Printf("failed to create %s request: %v", label, err)
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -474,30 +482,41 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHea
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("%s delivery network error to %s: %v", label, endpoint, err)
+			log.Printf("%s network error to %s: %v", label, currentURL, err)
 			continue
 		}
 
 		statusCode := resp.StatusCode
-		// Always read and log body on non-2xx for diagnostics
 		respBody := make([]byte, 512)
 		n, _ := resp.Body.Read(respBody)
 		resp.Body.Close()
 
+		// Manually follow redirects preserving POST method
+		if statusCode == 301 || statusCode == 302 || statusCode == 307 || statusCode == 308 {
+			location := resp.Header.Get("Location")
+			if location != "" {
+				log.Printf("%s redirect %d → %s", label, statusCode, location)
+				currentURL = location
+				// Don't count redirect as a retry attempt
+				attempt--
+				continue
+			}
+		}
+
 		if statusCode >= 200 && statusCode < 300 {
-			log.Printf("✅ %s delivered to %s (status %d)", label, endpoint, statusCode)
+			log.Printf("✅ %s delivered to %s (status %d)", label, currentURL, statusCode)
 			m.store.Mu.Lock()
 			m.store.WebhookDeliveries++
 			m.store.Mu.Unlock()
 			return
 		}
 		if isTransient(statusCode) {
-			log.Printf("⚠️  %s transient %d from %s body=%q", label, statusCode, endpoint, respBody[:n])
+			log.Printf("⚠️  %s transient %d from %s body=%q", label, statusCode, currentURL, respBody[:n])
 			continue
 		}
 
-		log.Printf("❌ %s rejected %d from %s body=%q, not retrying", label, statusCode, endpoint, respBody[:n])
+		log.Printf("❌ %s rejected %d from %s body=%q, not retrying", label, statusCode, currentURL, respBody[:n])
 		return
 	}
-	log.Printf("❌ %s max retries exceeded for %s", label, endpoint)
+	log.Printf("❌ %s max retries exceeded for %s", label, currentURL)
 }
