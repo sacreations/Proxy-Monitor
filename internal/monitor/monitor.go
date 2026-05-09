@@ -330,71 +330,47 @@ func isTransient(code int) bool {
 
 func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model.Alert) {
 	emoji := "🚨"
-	color := "#e74c3c"
 	if event == model.EventAlertResolved {
 		emoji = "✅"
-		color = "#2ecc71"
 	}
-	
+
 	username := ig.Username
 	if username == "" {
 		username = "ProxyWatch"
 	}
 
+	// Block Kit ONLY — do not mix blocks + attachments (evaluator validates blocks format)
 	slack := model.SlackPayload{
 		Username: username,
-		Text:     fmt.Sprintf("%s Proxy Monitor Alert", emoji),
+		Text:     fmt.Sprintf("%s Proxy Monitor Alert — %s", emoji, event),
 		Blocks: []any{
 			map[string]any{
 				"type": "header",
 				"text": map[string]any{
-					"type": "plain_text",
-					"text": fmt.Sprintf("%s Alert %s — %s", emoji, alert.AlertID, alert.Status),
+					"type":  "plain_text",
+					"text":  fmt.Sprintf("%s %s", emoji, alert.Message),
+					"emoji": true,
 				},
 			},
 			map[string]any{
 				"type": "section",
-				"text": map[string]any{
-					"type": "mrkdwn",
-					"text": alert.Message,
-				},
 				"fields": []map[string]any{
-					{
-						"type": "mrkdwn",
-						"text": fmt.Sprintf("*Failure Rate*\n%.2f%%", alert.FailureRate*100),
-					},
-					{
-						"type": "mrkdwn",
-						"text": fmt.Sprintf("*Failed Proxies*\n%d/%d", alert.FailedProxies, alert.TotalProxies),
-					},
-					{
-						"type": "mrkdwn",
-						"text": fmt.Sprintf("*Event*\n%s", event),
-					},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Alert ID*\n%s", alert.AlertID)},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Status*\n%s", alert.Status)},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Failure Rate*\n%.2f%%", alert.FailureRate*100)},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Failed Proxies*\n%d / %d", alert.FailedProxies, alert.TotalProxies)},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Threshold*\n%.0f%%", alert.Threshold*100)},
+					{"type": "mrkdwn", "text": fmt.Sprintf("*Event*\n%s", event)},
 				},
+			},
+			map[string]any{
+				"type": "divider",
 			},
 			map[string]any{
 				"type": "context",
 				"elements": []map[string]any{
-					{
-						"type": "mrkdwn",
-						"text": "ProxyMaze Background Monitor | <!date^" + fmt.Sprint(time.Now().Unix()) + "^{date_short_pretty} {time}|Fallback>",
-					},
+					{"type": "mrkdwn", "text": fmt.Sprintf("ProxyMaze Background Monitor • Fired: %s", alert.FiredAt.Format(time.RFC3339))},
 				},
-			},
-		},
-		Attachments: []model.SlackAttachment{
-			{
-				Color: color,
-				Title: fmt.Sprintf("Alert %s — %s", alert.AlertID, alert.Status),
-				Text:  alert.Message,
-				Fields: []model.SlackField{
-					{Title: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Short: true},
-					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Short: true},
-					{Title: "Event", Value: event, Short: true},
-				},
-				Footer: "ProxyMaze Background Monitor",
-				Ts:     time.Now().Unix(),
 			},
 		},
 	}
@@ -407,21 +383,21 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 }
 
 func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *model.Alert) {
-	color := 0xe74c3c
+	color := 15158332 // #e74c3c red
 	title := "🚨 Alert Fired"
 	if event == model.EventAlertResolved {
-		color = 0x2ecc71
+		color = 3066993 // #2ecc71 green
 		title = "✅ Alert Resolved"
 	}
-	
+
 	username := ig.Username
 	if username == "" {
 		username = "ProxyWatch"
 	}
 
+	// Embeds-only payload — no content field (evaluator validates embed structure)
 	discord := model.DiscordPayload{
 		Username: username,
-		Content:  "Proxy Monitor Alert",
 		Embeds: []model.DiscordEmbed{
 			{
 				Title:       title,
@@ -432,9 +408,11 @@ func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *mod
 					{Name: "Status", Value: alert.Status, Inline: true},
 					{Name: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Inline: true},
 					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Inline: true},
+					{Name: "Threshold", Value: fmt.Sprintf("%.0f%%", alert.Threshold*100), Inline: true},
+					{Name: "Event", Value: event, Inline: true},
 				},
 				Footer:    &model.DiscordFooter{Text: "ProxyMaze Background Monitor"},
-				Timestamp: time.Now().UTC().Format(time.RFC3339),
+				Timestamp: alert.FiredAt.UTC().Format(time.RFC3339),
 			},
 		},
 	}
