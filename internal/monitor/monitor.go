@@ -244,7 +244,7 @@ func (m *Monitor) evaluateGlobalAlert() {
 func generateAlertID() string {
 	b := make([]byte, 8)
 	_, _ = rand.Read(b)
-	return fmt.Sprintf("alert_%x", b)
+	return fmt.Sprintf("alert-%x", b)
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +330,45 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 	slack := model.SlackPayload{
 		Username: username,
 		Text:     fmt.Sprintf("%s Proxy Monitor Alert", emoji),
+		Blocks: []any{
+			map[string]any{
+				"type": "header",
+				"text": map[string]any{
+					"type": "plain_text",
+					"text": fmt.Sprintf("%s Alert %s — %s", emoji, alert.AlertID, alert.Status),
+				},
+			},
+			map[string]any{
+				"type": "section",
+				"text": map[string]any{
+					"type": "mrkdwn",
+					"text": alert.Message,
+				},
+				"fields": []map[string]any{
+					{
+						"type": "mrkdwn",
+						"text": fmt.Sprintf("*Failure Rate*\n%.2f%%", alert.FailureRate*100),
+					},
+					{
+						"type": "mrkdwn",
+						"text": fmt.Sprintf("*Failed Proxies*\n%d/%d", alert.DownProxies, alert.TotalProxies),
+					},
+					{
+						"type": "mrkdwn",
+						"text": fmt.Sprintf("*Event*\n%s", event),
+					},
+				},
+			},
+			map[string]any{
+				"type": "context",
+				"elements": []map[string]any{
+					{
+						"type": "mrkdwn",
+						"text": "ProxyMaze Background Monitor | <!date^" + fmt.Sprint(time.Now().Unix()) + "^{date_short_pretty} {time}|Fallback>",
+					},
+				},
+			},
+		},
 		Attachments: []model.SlackAttachment{
 			{
 				Color: color,

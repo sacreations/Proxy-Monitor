@@ -138,6 +138,7 @@ type IntegrationInput struct {
 type SlackPayload struct {
 	Username    string            `json:"username,omitempty"`
 	Text        string            `json:"text"`
+	Blocks      []any             `json:"blocks,omitempty"`
 	Attachments []SlackAttachment `json:"attachments,omitempty"`
 }
 
