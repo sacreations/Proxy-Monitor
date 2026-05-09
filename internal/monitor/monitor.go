@@ -54,6 +54,8 @@ func (m *Monitor) Run() {
 		ticker := time.NewTicker(interval)
 
 		func() {
+			m.runCycle()
+
 			for {
 				select {
 				case <-ticker.C:
@@ -115,43 +117,43 @@ func (m *Monitor) probe(proxyID string, timeout time.Duration) {
 	client := &http.Client{Timeout: timeout}
 	start := time.Now()
 
-	result := model.ProbeResult{Timestamp: start.UTC()}
+	result := model.ProbeResult{CheckedAt: start.UTC()}
 
 	resp, err := client.Get(proxyURL)
 	result.Latency = time.Since(start).Milliseconds()
 
 	if err != nil {
 		result.StatusCode = 0
-		result.Result = model.StatusDown
+		result.Status = model.StatusDown
 		result.Error = err.Error()
 	} else {
 		resp.Body.Close()
 		result.StatusCode = resp.StatusCode
 		switch {
 		case resp.StatusCode >= 200 && resp.StatusCode < 300:
-			result.Result = model.StatusUp
+			result.Status = model.StatusUp
 		case resp.StatusCode >= 500:
-			result.Result = model.StatusDown
+			result.Status = model.StatusDown
 			result.Error = fmt.Sprintf("server error: %d", resp.StatusCode)
 		default:
-			result.Result = model.StatusDown
+			result.Status = model.StatusDown
 			result.Error = fmt.Sprintf("non-2xx: %d", resp.StatusCode)
 		}
 	}
 
-	now := result.Timestamp
+	now := result.CheckedAt
 	m.store.Mu.Lock()
 	p, ok = m.store.Proxies[proxyID]
 	if ok {
 		p.History = append(p.History, result)
-		p.Status = result.Result
+		p.Status = result.Status
 		p.LastCheckedAt = &now
 		p.UpdatedAt = now
 		p.TotalChecks = len(p.History)
 
 		upCount := 0
 		for _, h := range p.History {
-			if h.Result == model.StatusUp {
+			if h.Status == model.StatusUp {
 				upCount++
 			}
 		}
@@ -159,7 +161,7 @@ func (m *Monitor) probe(proxyID string, timeout time.Duration) {
 
 		consec := 0
 		for i := len(p.History) - 1; i >= 0; i-- {
-			if p.History[i].Result == model.StatusDown {
+			if p.History[i].Status == model.StatusDown {
 				consec++
 			} else {
 				break
@@ -198,15 +200,15 @@ func (m *Monitor) evaluateGlobalAlert() {
 			alertID := generateAlertID()
 			now := time.Now().UTC()
 			alert := &model.Alert{
-				AlertID:        alertID,
-				Status:         model.AlertActive,
-				FailureRate:    failureRate,
-				TotalProxies:   total,
-				FailedProxies:  downCount,
-				FailedProxyIDs: failedIDs,
-				Threshold:      model.FailureThreshold,
-				FiredAt:        now,
-				Message:        fmt.Sprintf("failure rate %.2f%% >= %.2f%% threshold", failureRate*100, model.FailureThreshold*100),
+				AlertID:      alertID,
+				Status:       model.AlertActive,
+				FailureRate:  failureRate,
+				Threshold:    model.FailureThreshold,
+				TotalProxies: total,
+				DownProxies:  downCount,
+				DownProxyIDs: failedIDs,
+				FiredAt:      now,
+				Message:      fmt.Sprintf("failure rate %.2f%% >= %.2f%% threshold", failureRate*100, model.FailureThreshold*100),
 			}
 			m.store.Alerts = append(m.store.Alerts, alert)
 			m.store.AlertsByID[alertID] = alert
@@ -217,8 +219,8 @@ func (m *Monitor) evaluateGlobalAlert() {
 			if a, ok := m.store.AlertsByID[m.store.ActiveAlertID]; ok {
 				a.FailureRate = failureRate
 				a.TotalProxies = total
-				a.FailedProxies = downCount
-				a.FailedProxyIDs = failedIDs
+				a.DownProxies = downCount
+				a.DownProxyIDs = failedIDs
 			}
 		}
 	} else {
@@ -228,8 +230,8 @@ func (m *Monitor) evaluateGlobalAlert() {
 				a.Status = model.AlertResolved
 				a.FailureRate = failureRate
 				a.TotalProxies = total
-				a.FailedProxies = downCount
-				a.FailedProxyIDs = failedIDs
+				a.DownProxies = downCount
+				a.DownProxyIDs = failedIDs
 				a.ResolvedAt = &now
 				log.Printf("✅ ALERT RESOLVED alert=%s rate=%.2f%%", m.store.ActiveAlertID, failureRate*100)
 				go m.dispatchNotifications(model.EventAlertResolved, a)
@@ -262,28 +264,45 @@ func (m *Monitor) dispatchNotifications(event string, alert *model.Alert) {
 	m.store.Mu.RUnlock()
 
 	payload := model.WebhookPayload{
-		Event:          event,
-		AlertID:        alert.AlertID,
-		Status:         alert.Status,
-		FailureRate:    alert.FailureRate,
-		TotalProxies:   alert.TotalProxies,
-		FailedProxies:  alert.FailedProxies,
-		FailedProxyIDs: alert.FailedProxyIDs,
-		Threshold:      alert.Threshold,
-		Message:        alert.Message,
-		Timestamp:      time.Now().UTC().Format(time.RFC3339),
+		Event:   event,
+		AlertID: alert.AlertID,
 	}
 
 	for _, wh := range webhooks {
-		go deliverWebhook(wh.URL, payload)
+		go m.deliverWebhook(wh.URL, payload)
 	}
 	for _, ig := range integrations {
-		switch ig.Type {
-		case "slack":
-			go deliverSlack(ig.Endpoint, payload)
-		case "discord":
-			go deliverDiscord(ig.Endpoint, payload)
+		go m.deliverIntegration(ig, event, alert)
+	}
+}
+
+func (m *Monitor) deliverWebhook(url string, payload model.WebhookPayload) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("webhook marshal error: %v", err)
+		return
+	}
+	m.deliverWithRetry("webhook", url, body)
+}
+
+func (m *Monitor) deliverIntegration(ig *model.Integration, event string, alert *model.Alert) {
+	// Check if this integration subscribed to this event
+	wantsEvent := false
+	for _, ev := range ig.Events {
+		if ev == event {
+			wantsEvent = true
+			break
 		}
+	}
+	if len(ig.Events) > 0 && !wantsEvent {
+		return
+	}
+
+	switch ig.Type {
+	case "slack":
+		m.deliverSlack(ig, event, alert)
+	case "discord":
+		m.deliverDiscord(ig, event, alert)
 	}
 }
 
@@ -295,35 +314,34 @@ func isTransient(code int) bool {
 	return code == 500 || code == 502 || code == 503 || code == 504
 }
 
-func deliverWebhook(url string, payload model.WebhookPayload) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("webhook marshal error: %v", err)
-		return
-	}
-	deliverWithRetry("webhook", url, body)
-}
-
-func deliverSlack(endpoint string, payload model.WebhookPayload) {
+func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model.Alert) {
 	emoji := "🚨"
 	color := "#e74c3c"
-	if payload.Event == model.EventAlertResolved {
+	if event == model.EventAlertResolved {
 		emoji = "✅"
 		color = "#2ecc71"
 	}
+	
+	username := ig.Username
+	if username == "" {
+		username = "ProxyWatch"
+	}
+
 	slack := model.SlackPayload{
-		Text: fmt.Sprintf("%s Proxy Monitor Alert", emoji),
+		Username: username,
+		Text:     fmt.Sprintf("%s Proxy Monitor Alert", emoji),
 		Attachments: []model.SlackAttachment{
 			{
 				Color: color,
-				Title: fmt.Sprintf("Alert %s — %s", payload.AlertID, payload.Status),
-				Text:  payload.Message,
+				Title: fmt.Sprintf("Alert %s — %s", alert.AlertID, alert.Status),
+				Text:  alert.Message,
 				Fields: []model.SlackField{
-					{Title: "Failure Rate", Value: fmt.Sprintf("%.2f%%", payload.FailureRate*100), Short: true},
-					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", payload.FailedProxies, payload.TotalProxies), Short: true},
-					{Title: "Event", Value: payload.Event, Short: true},
-					{Title: "Timestamp", Value: payload.Timestamp, Short: true},
+					{Title: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Short: true},
+					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.DownProxies, alert.TotalProxies), Short: true},
+					{Title: "Event", Value: event, Short: true},
 				},
+				Footer: "ProxyMaze Background Monitor",
+				Ts:     time.Now().Unix(),
 			},
 		},
 	}
@@ -332,30 +350,38 @@ func deliverSlack(endpoint string, payload model.WebhookPayload) {
 		log.Printf("slack marshal error: %v", err)
 		return
 	}
-	deliverWithRetry("slack", endpoint, body)
+	m.deliverWithRetry("slack", ig.WebhookURL, body)
 }
 
-func deliverDiscord(endpoint string, payload model.WebhookPayload) {
+func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *model.Alert) {
 	color := 0xe74c3c
 	title := "🚨 Alert Fired"
-	if payload.Event == model.EventAlertResolved {
+	if event == model.EventAlertResolved {
 		color = 0x2ecc71
 		title = "✅ Alert Resolved"
 	}
+	
+	username := ig.Username
+	if username == "" {
+		username = "ProxyWatch"
+	}
+
 	discord := model.DiscordPayload{
-		Content: "Proxy Monitor Alert",
+		Username: username,
+		Content:  "Proxy Monitor Alert",
 		Embeds: []model.DiscordEmbed{
 			{
 				Title:       title,
-				Description: payload.Message,
+				Description: alert.Message,
 				Color:       color,
 				Fields: []model.DiscordEmbedField{
-					{Name: "Alert ID", Value: payload.AlertID, Inline: true},
-					{Name: "Status", Value: payload.Status, Inline: true},
-					{Name: "Failure Rate", Value: fmt.Sprintf("%.2f%%", payload.FailureRate*100), Inline: true},
-					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", payload.FailedProxies, payload.TotalProxies), Inline: true},
+					{Name: "Alert ID", Value: alert.AlertID, Inline: true},
+					{Name: "Status", Value: alert.Status, Inline: true},
+					{Name: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Inline: true},
+					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.DownProxies, alert.TotalProxies), Inline: true},
 				},
-				Timestamp: payload.Timestamp,
+				Footer:    &model.DiscordFooter{Text: "ProxyMaze Background Monitor"},
+				Timestamp: time.Now().UTC().Format(time.RFC3339),
 			},
 		},
 	}
@@ -364,10 +390,10 @@ func deliverDiscord(endpoint string, payload model.WebhookPayload) {
 		log.Printf("discord marshal error: %v", err)
 		return
 	}
-	deliverWithRetry("discord", endpoint, body)
+	m.deliverWithRetry("discord", ig.WebhookURL, body)
 }
 
-func deliverWithRetry(label, endpoint string, body []byte) {
+func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte) {
 	backoff := 1 * time.Second
 	maxBackoff := 30 * time.Second
 
@@ -386,18 +412,23 @@ func deliverWithRetry(label, endpoint string, body []byte) {
 			log.Printf("%s delivery error to %s: %v", label, endpoint, err)
 			continue
 		}
+		
+		statusCode := resp.StatusCode
 		resp.Body.Close()
 
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if statusCode >= 200 && statusCode < 300 {
 			log.Printf("✅ %s delivered to %s", label, endpoint)
+			m.store.Mu.Lock()
+			m.store.WebhookDeliveries++
+			m.store.Mu.Unlock()
 			return
 		}
-		if isTransient(resp.StatusCode) {
-			log.Printf("⚠️  %s transient failure to %s (status %d)", label, endpoint, resp.StatusCode)
+		if isTransient(statusCode) {
+			log.Printf("⚠️  %s transient failure to %s (status %d)", label, endpoint, statusCode)
 			continue
 		}
 
-		log.Printf("❌ %s rejected by %s (status %d), not retrying", label, endpoint, resp.StatusCode)
+		log.Printf("❌ %s rejected by %s (status %d), not retrying", label, endpoint, statusCode)
 		return
 	}
 }

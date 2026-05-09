@@ -168,8 +168,8 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	if len(input.URLs) == 0 {
-		errResp(w, http.StatusBadRequest, "urls list must not be empty")
+	if len(input.Proxies) == 0 {
+		errResp(w, http.StatusBadRequest, "proxies list must not be empty")
 		return
 	}
 
@@ -181,7 +181,7 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var created []*model.Proxy
-	for _, u := range input.URLs {
+	for _, u := range input.Proxies {
 		u = strings.TrimSpace(u)
 		if u == "" {
 			continue
@@ -203,9 +203,11 @@ func (h *handlers) proxiesCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	h.store.Mu.Unlock()
 
+	h.monitor.Restart()
+
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"message": fmt.Sprintf("ingested %d new proxies", len(created)),
-		"proxies": created,
+		"accepted": len(created),
+		"proxies":  created,
 	})
 }
 
@@ -281,15 +283,11 @@ func (h *handlers) proxyHistory(w http.ResponseWriter, r *http.Request) {
 
 func (h *handlers) proxiesDelete(w http.ResponseWriter, _ *http.Request) {
 	h.store.Mu.Lock()
-	count := len(h.store.Proxies)
 	h.store.Proxies = make(map[string]*model.Proxy)
 	h.store.ActiveAlertID = ""
 	h.store.Mu.Unlock()
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"message":         "proxy pool cleared",
-		"proxies_removed": count,
-	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------------------------------------------------------------------------
@@ -344,13 +342,19 @@ func (h *handlers) integrationCreate(w http.ResponseWriter, r *http.Request) {
 		errResp(w, http.StatusBadRequest, "type must be 'slack' or 'discord'")
 		return
 	}
-	if input.Endpoint == "" {
-		errResp(w, http.StatusBadRequest, "endpoint is required")
+	if input.WebhookURL == "" {
+		errResp(w, http.StatusBadRequest, "webhook_url is required")
 		return
 	}
 
 	id := fmt.Sprintf("int_%d", time.Now().UnixNano())
-	ig := &model.Integration{ID: id, Type: input.Type, Endpoint: input.Endpoint}
+	ig := &model.Integration{
+		ID:         id,
+		Type:       input.Type,
+		WebhookURL: input.WebhookURL,
+		Username:   input.Username,
+		Events:     input.Events,
+	}
 
 	h.store.Mu.Lock()
 	h.store.Integrations[id] = ig
@@ -391,22 +395,12 @@ func (h *handlers) metrics(w http.ResponseWriter, _ *http.Request) {
 		}
 	}
 
-	var failureRate float64
-	if totalProxies > 0 {
-		failureRate = float64(down) / float64(totalProxies)
-	}
-
 	m := model.Metrics{
-		TotalChecks:    totalChecks,
-		TotalProxies:   totalProxies,
-		ProxiesUp:      up,
-		ProxiesDown:    down,
-		ProxiesPending: pending,
-		ActiveAlerts:   activeAlerts,
-		ResolvedAlerts: resolvedAlerts,
-		TotalAlerts:    len(h.store.Alerts),
-		FailureRate:    failureRate,
-		WebhookCount:   len(h.store.Webhooks),
+		TotalChecks:       totalChecks,
+		CurrentPoolSize:   totalProxies,
+		ActiveAlerts:      activeAlerts,
+		TotalAlerts:       len(h.store.Alerts),
+		WebhookDeliveries: h.store.WebhookDeliveries,
 	}
 	h.store.Mu.RUnlock()
 

@@ -35,16 +35,16 @@ type Proxy struct {
 
 // ProbeResult stores the outcome of a single health check probe.
 type ProbeResult struct {
-	Timestamp  time.Time `json:"timestamp"`
+	CheckedAt  time.Time `json:"checked_at"`
 	StatusCode int       `json:"status_code"`
 	Latency    int64     `json:"latency_ms"`
-	Result     string    `json:"result"` // "up" | "down"
+	Status     string    `json:"status"` // "up" | "down"
 	Error      string    `json:"error,omitempty"`
 }
 
 // ProxyInput is the expected JSON body for POST /proxies.
 type ProxyInput struct {
-	URLs    []string `json:"urls"`
+	Proxies []string `json:"proxies"`
 	Replace bool     `json:"replace"`
 }
 
@@ -78,16 +78,18 @@ type ProxyDetailResponse struct {
 // Alert represents an alert fired when the global failure rate breaches the
 // threshold. Only ONE alert can be active at a time.
 type Alert struct {
-	AlertID        string     `json:"alert_id"`
-	Status         string     `json:"status"` // "active", "resolved"
-	FailureRate    float64    `json:"failure_rate"`
-	TotalProxies   int        `json:"total_proxies"`
-	FailedProxies  int        `json:"failed_proxies"`
-	FailedProxyIDs []string   `json:"failed_proxy_ids"`
-	Threshold      float64    `json:"threshold"`
-	FiredAt        time.Time  `json:"fired_at"`
+	AlertID     string  `json:"alert_id"`
+	Status      string  `json:"status"` // "active", "resolved"
+	FailureRate float64 `json:"failure_rate"`
+	Threshold   float64 `json:"threshold"`
+	
+	// Internal tracking fields (not necessarily exposed directly, but good to keep)
+	TotalProxies   int        `json:"total_proxies,omitempty"`
+	DownProxies    int        `json:"down_proxies,omitempty"`
+	DownProxyIDs   []string   `json:"down_proxy_ids,omitempty"`
+	FiredAt        time.Time  `json:"fired_at,omitempty"`
 	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
-	Message        string     `json:"message"`
+	Message        string     `json:"message,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
@@ -105,18 +107,10 @@ type WebhookInput struct {
 	URL string `json:"url"`
 }
 
-// WebhookPayload is the JSON body delivered to webhook receivers.
+// WebhookPayload is the exactly specified JSON body delivered to webhook receivers.
 type WebhookPayload struct {
-	Event          string   `json:"event"` // "alert.fired" | "alert.resolved"
-	AlertID        string   `json:"alert_id"`
-	Status         string   `json:"status"`
-	FailureRate    float64  `json:"failure_rate"`
-	TotalProxies   int      `json:"total_proxies"`
-	FailedProxies  int      `json:"failed_proxies"`
-	FailedProxyIDs []string `json:"failed_proxy_ids"`
-	Threshold      float64  `json:"threshold"`
-	Message        string   `json:"message"`
-	Timestamp      string   `json:"timestamp"`
+	Event   string `json:"event"`
+	AlertID string `json:"alert_id"`
 }
 
 // ---------------------------------------------------------------------------
@@ -125,19 +119,24 @@ type WebhookPayload struct {
 
 // Integration represents a Slack or Discord integration.
 type Integration struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"` // "slack" | "discord"
-	Endpoint string `json:"endpoint"`
+	ID         string   `json:"id"`
+	Type       string   `json:"type"` // "slack" | "discord"
+	WebhookURL string   `json:"webhook_url"`
+	Username   string   `json:"username"`
+	Events     []string `json:"events"`
 }
 
 // IntegrationInput is the expected JSON body for POST /integrations.
 type IntegrationInput struct {
-	Type     string `json:"type"`
-	Endpoint string `json:"endpoint"`
+	Type       string   `json:"type"`
+	WebhookURL string   `json:"webhook_url"`
+	Username   string   `json:"username"`
+	Events     []string `json:"events"`
 }
 
 // SlackPayload follows the Slack Incoming Webhook format.
 type SlackPayload struct {
+	Username    string            `json:"username,omitempty"`
 	Text        string            `json:"text"`
 	Attachments []SlackAttachment `json:"attachments,omitempty"`
 }
@@ -148,6 +147,8 @@ type SlackAttachment struct {
 	Title  string       `json:"title"`
 	Text   string       `json:"text"`
 	Fields []SlackField `json:"fields,omitempty"`
+	Footer string       `json:"footer,omitempty"`
+	Ts     int64        `json:"ts,omitempty"`
 }
 
 // SlackField is a key-value field inside a Slack attachment.
@@ -159,8 +160,9 @@ type SlackField struct {
 
 // DiscordPayload follows the Discord Webhook format.
 type DiscordPayload struct {
-	Content string         `json:"content"`
-	Embeds  []DiscordEmbed `json:"embeds,omitempty"`
+	Username string         `json:"username,omitempty"`
+	Content  string         `json:"content"`
+	Embeds   []DiscordEmbed `json:"embeds,omitempty"`
 }
 
 // DiscordEmbed is a single rich embed in a Discord webhook message.
@@ -169,6 +171,7 @@ type DiscordEmbed struct {
 	Description string              `json:"description"`
 	Color       int                 `json:"color"`
 	Fields      []DiscordEmbedField `json:"fields,omitempty"`
+	Footer      *DiscordFooter      `json:"footer,omitempty"`
 	Timestamp   string              `json:"timestamp,omitempty"`
 }
 
@@ -179,22 +182,21 @@ type DiscordEmbedField struct {
 	Inline bool   `json:"inline"`
 }
 
+type DiscordFooter struct {
+	Text string `json:"text"`
+}
+
 // ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------
 
 // Metrics is the response for GET /metrics.
 type Metrics struct {
-	TotalChecks    int     `json:"total_checks"`
-	TotalProxies   int     `json:"total_proxies"`
-	ProxiesUp      int     `json:"proxies_up"`
-	ProxiesDown    int     `json:"proxies_down"`
-	ProxiesPending int     `json:"proxies_pending"`
-	ActiveAlerts   int     `json:"active_alerts"`
-	ResolvedAlerts int     `json:"resolved_alerts"`
-	TotalAlerts    int     `json:"total_alerts"`
-	FailureRate    float64 `json:"failure_rate"`
-	WebhookCount   int     `json:"webhook_count"`
+	TotalChecks       int `json:"total_checks"`
+	CurrentPoolSize   int `json:"current_pool_size"`
+	ActiveAlerts      int `json:"active_alerts"`
+	TotalAlerts       int `json:"total_alerts"`
+	WebhookDeliveries int `json:"webhook_deliveries"`
 }
 
 // ---------------------------------------------------------------------------

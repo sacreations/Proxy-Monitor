@@ -16,9 +16,10 @@ type Store struct {
 	Proxies       map[string]*model.Proxy
 	Alerts        []*model.Alert
 	AlertsByID    map[string]*model.Alert
-	ActiveAlertID string
-	Webhooks      map[string]*model.Webhook
-	Integrations  map[string]*model.Integration
+	ActiveAlertID     string
+	Webhooks          map[string]*model.Webhook
+	Integrations      map[string]*model.Integration
+	WebhookDeliveries int
 }
 
 // New creates and returns an initialised Store with sensible defaults.
