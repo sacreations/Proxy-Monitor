@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Proxy Monitor — Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#0a0e1a;
+    --surface:#111827;
+    --card:#1a2236;
+    --border:#2a3450;
+    --text:#e2e8f0;
+    --muted:#8892a8;
+    --accent:#6366f1;
+    --accent2:#818cf8;
+    --green:#10b981;
+    --red:#ef4444;
+    --amber:#f59e0b;
+    --cyan:#06b6d4;
+    --card-shadow: 0 10px 25px -5px rgba(0,0,0,0.3), 0 8px 10px -6px rgba(0,0,0,0.3);
+  }
+  
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5}
+  .container{max-width:1400px;margin:0 auto;padding:24px 32px}
+  
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px;padding-bottom:20px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:100;padding-top:10px}
+  header h1{font-size:24px;font-weight:800;background:linear-gradient(135deg,var(--accent),var(--cyan));-webkit-background-clip:text;-webkit-text-fill-color:transparent;display:flex;align-items:center;gap:12px;white-space:nowrap}
+  header h1 .team-tag { font-size: 11px; background: rgba(99,102,241,0.15); -webkit-text-fill-color: var(--accent2); padding: 4px 10px; border-radius: 6px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; border: 1px solid rgba(99,102,241,0.2); margin-left: 4px; }
+  
+  .top-nav { display: flex; gap: 12px; background: var(--surface); padding: 4px; border-radius: 12px; border: 1px solid var(--border); margin: 0 20px; }
+  .nav-btn { background: transparent; border: none; color: var(--muted); padding: 8px 16px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+  .nav-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+  .nav-btn.active { background: var(--card); color: var(--text); box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
+
+  header .status{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted);background:var(--surface);padding:6px 14px;border-radius:20px;border:1px solid var(--border);white-space:nowrap}
+  header .dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(0.85)}}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:20px;margin-bottom:32px}
+  .stat-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;position:relative;overflow:hidden;box-shadow:var(--card-shadow);transition:transform 0.2s}
+  .stat-card:hover{transform:translateY(-2px)}
+  .stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,var(--accent),var(--cyan))}
+  .stat-card .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;margin-bottom:10px}
+  .stat-card .value{font-size:32px;font-weight:800;letter-spacing:-1px}
+  .stat-card .value.up{color:var(--green)}.stat-card .value.down{color:var(--red)}.stat-card .value.warn{color:var(--amber)}
+
+  .controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:24px;margin-bottom:32px;align-items:stretch}
+  .control-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;box-shadow:var(--card-shadow);display:flex;flex-direction:column}
+  .control-card h3{font-size:16px;font-weight:700;margin-bottom:20px;color:var(--accent2);display:flex;align-items:center;gap:10px}
+  
+  .form-group{flex-grow:1}
+  .form-row{display:flex;gap:12px;margin-bottom:16px;align-items:center}
+  .form-row label{font-size:13px;color:var(--muted);min-width:100px;font-weight:500}
+  
+  input[type="number"], input[type="text"], textarea {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    flex: 1;
+    width: 100%;
+    transition: all 0.2s;
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+  textarea { resize: none; min-height: 120px; line-height: 1.6; width: 100%; display: block; }
+
+  /* Custom Checkbox */
+  .checkbox-wrapper { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; font-size: 13px; color: var(--muted); }
+  .checkbox-wrapper input { display: none; }
+  .checkmark { width: 18px; height: 18px; border: 1px solid var(--border); border-radius: 5px; position: relative; transition: 0.2s; background: var(--surface); }
+  .checkbox-wrapper:hover .checkmark { border-color: var(--accent); }
+  .checkbox-wrapper input:checked + .checkmark { background: var(--accent); border-color: var(--accent); }
+  .checkbox-wrapper input:checked + .checkmark::after { content: '✓'; position: absolute; color: white; font-size: 12px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+
+  .actions { display: flex; gap: 12px; margin-top: auto; padding-top: 12px; align-items: center; }
+  
+  .btn{padding:10px 20px;border-radius:10px;border:none;font-family:inherit;font-size:14px;font-weight:700;cursor:pointer;transition:all 0.2s;display:inline-flex;align-items:center;justify-content:center;gap:8px}
+  .btn-primary{background:var(--accent);color:#fff;box-shadow: 0 4px 14px 0 rgba(99,102,241,0.3)}
+  .btn-primary:hover{background:var(--accent2);transform:translateY(-1px);box-shadow: 0 6px 20px rgba(99,102,241,0.4)}
+  .btn-danger{background:rgba(239,68,68,0.1);color:var(--red);border:1px solid rgba(239,68,68,0.2)}
+  .btn-danger:hover{background:rgba(239,68,68,0.2);border-color:var(--red)}
+
+  .section{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:32px;box-shadow:var(--card-shadow)}
+  .tabs{display:flex;gap:8px;margin-bottom:24px;background:var(--surface);padding:6px;border-radius:12px;width:fit-content;border:1px solid var(--border)}
+  .tab{padding:8px 20px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;color:var(--muted);transition:0.2s}
+  .tab:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+  .tab.active{color:var(--accent2);background:var(--card);box-shadow: 0 4px 12px rgba(0,0,0,0.2);color:var(--text)}
+  
+  .tab-content{display:none;animation:fadeIn 0.3s ease-out}
+  .tab-content.active{display:block}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:scale(1)}}
+
+  .table-container { overflow-x: auto; width: 100%; border-radius: 12px; }
+  table{width:100%;border-collapse:separate;border-spacing:0;font-size:14px}
+  th{text-align:left;padding:16px;color:var(--muted);font-weight:700;background:var(--surface);font-size:11px;text-transform:uppercase;letter-spacing:1px;position:sticky;top:0;z-index:1}
+  td{padding:14px 16px;border-bottom:1px solid var(--border)}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(99,102,241,0.03)}
+
+  .pill{display:inline-flex;align-items:center;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px}
+  .pill::before { content:''; width:6px; height:6px; border-radius:50%; margin-right:6px; }
+  .pill.up{background:rgba(16,185,129,0.1);color:var(--green)}
+  .pill.up::before { background: var(--green); }
+  .pill.down{background:rgba(239,68,68,0.1);color:var(--red)}
+  .pill.down::before { background: var(--red); }
+  .pill.pending{background:rgba(245,158,11,0.1);color:var(--amber)}
+  .pill.pending::before { background: var(--amber); }
+
+  .toast{position:fixed;bottom:32px;right:32px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 24px;font-size:14px;font-weight:600;box-shadow:0 12px 32px rgba(0,0,0,0.5);transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);z-index:999;display:flex;align-items:center;gap:12px;border-left:4px solid var(--accent)}
+  .toast.show{transform:translateY(0);opacity:1}
+  
+  .empty{text-align:center;padding:60px 20px;color:var(--muted);font-size:15px;display:flex;flex-direction:column;align-items:center;gap:16px}
+  .empty::before { content:'∅'; font-size:40px; opacity:0.3; }
+
+  .api-docs { display: flex; flex-direction: column; gap: 20px; }
+  .doc-item { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .doc-header { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 12px; flex-wrap: wrap; }
+  .method { padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 800; min-width: 60px; text-align: center; }
+  .method.get { background: rgba(16,185,129,0.1); color: var(--green); }
+  .method.post { background: rgba(99,102,241,0.1); color: var(--accent2); }
+  .method.delete { background: rgba(239,68,68,0.1); color: var(--red); }
+  .path { font-family: 'JetBrains Mono', monospace; font-size: 14px; color: var(--text); font-weight: 700; }
+  .desc { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: auto; }
+  .doc-item p { font-size: 14px; color: var(--muted); line-height: 1.6; margin-bottom: 12px; }
+  .doc-item pre { background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; border: 1px solid var(--border); overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>⚡ Proxy Monitor <span class="team-tag">Net Runners</span></h1>
+    <nav class="top-nav">
+      <button class="nav-btn active" id="nav-dashboard" onclick="showSection('dashboard')">Dashboard</button>
+      <button class="nav-btn" id="nav-api" onclick="showSection('api')">Endpoints & API</button>
+    </nav>
+    <div class="status"><span class="dot"></span> Live <span id="refresh-timer">refreshing in 5s</span></div>
+  </header>
+
+  <div id="main-dashboard">
+    <div class="grid" id="stats"></div>
+
+    <div class="controls">
+      <div class="control-card">
+        <h3>⚙️ Configuration</h3>
+        <div class="form-group">
+          <div class="form-row"><label>Interval (s)</label><input type="number" id="cfg-interval" value="30" min="1"></div>
+          <div class="form-row"><label>Timeout (ms)</label><input type="number" id="cfg-timeout" value="5000" min="100"></div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="setConfig()">Apply Config</button>
+        </div>
+      </div>
+      <div class="control-card">
+        <h3>🌐 Add Proxies</h3>
+        <div class="form-group">
+          <textarea id="proxy-urls" placeholder="Enter proxy URLs, one per line&#10;e.g. http://proxy.example.com/proxy/px-101"></textarea>
+        </div>
+        <div class="actions">
+          <label class="checkbox-wrapper">
+            <input type="checkbox" id="proxy-replace">
+            <span class="checkmark"></span>
+            Replace
+          </label>
+          <button class="btn btn-primary" onclick="addProxies()">Add Proxies</button>
+          <button class="btn btn-danger" onclick="deleteProxies()">Clear All</button>
+        </div>
+      </div>
+      <div class="control-card">
+        <h3>🔗 Import from Geonode</h3>
+        <div class="form-group">
+          <div class="form-row"><label>Limit</label><input type="number" id="geo-limit" value="10" min="1" max="500"></div>
+          <div class="form-row"><label>Protocol</label><input type="text" id="geo-proto" value="http,https" placeholder="http,https,socks5"></div>
+        </div>
+        <div class="actions">
+          <label class="checkbox-wrapper">
+            <input type="checkbox" id="geo-replace">
+            <span class="checkmark"></span>
+            Replace
+          </label>
+          <button class="btn btn-primary" onclick="importGeonode()">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab(this,'tab-proxies')">Proxies</div>
+        <div class="tab" onclick="switchTab(this,'tab-alerts')">Alerts</div>
+      </div>
+      <div class="tab-content active" id="tab-proxies">
+        <div class="table-container" id="proxy-table">
+          <div class="empty">No proxies registered yet</div>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-alerts">
+        <div class="table-container" id="alert-table">
+          <div class="empty">No alerts yet</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="main-api" style="display: none">
+    <div class="section">
+      <h2 style="margin-bottom: 24px">🛠️ API Documentation</h2>
+      <div class="api-docs">
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/health</span>
+            <span class="desc">Service Health Check</span>
+          </div>
+          <p>Returns the current status of the service and Redis connection. Used for load balancer health checks.</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/config</span>
+            <span class="desc">Get Monitor Configuration</span>
+          </div>
+          <p>Retrieves current background polling settings, including interval and request timeouts.</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method post">POST</span>
+            <span class="path">/config</span>
+            <span class="desc">Update Configuration</span>
+          </div>
+          <p>Updates polling parameters. Restarts the background poller immediately to apply new settings.</p>
+          <pre class="mono">{ "check_interval_seconds": 30, "request_timeout_ms": 5000 }</pre>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/proxies</span>
+            <span class="desc">List All Proxies</span>
+          </div>
+          <p>Returns the complete list of monitored proxies with aggregate metrics (total checks, uptime, current status).</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method post">POST</span>
+            <span class="path">/proxies</span>
+            <span class="desc">Ingest Proxies</span>
+          </div>
+          <p>Adds new proxy URLs to the monitoring pool. Use <code>"replace": true</code> to clear the existing pool before adding.</p>
+          <pre class="mono">{ "urls": ["http://..."], "replace": false }</pre>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/proxies/{id}/history</span>
+            <span class="desc">Proxy Probe History</span>
+          </div>
+          <p>Returns a time-series array of the last 100 probe results for a specific proxy ID.</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method delete">DELETE</span>
+            <span class="path">/proxies</span>
+            <span class="desc">Clear Proxy Pool</span>
+          </div>
+          <p>Removes all proxies from monitoring. Note: Alert history is <strong>preserved</strong> for audit purposes.</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/alerts</span>
+            <span class="desc">Alert History</span>
+          </div>
+          <p>Lists all global failure rate alerts. Includes both active and resolved alerts with failed proxy IDs.</p>
+        </div>
+
+        <div class="doc-item">
+          <div class="doc-header">
+            <span class="method get">GET</span>
+            <span class="path">/metrics</span>
+            <span class="desc">Operational Metrics</span>
+          </div>
+          <p>Provides real-time statistics including total checks, failure rate, and alert counts for Prometheus or dashboarding.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let countdown=5;
+const $=id=>document.getElementById(id);
+
+function showSection(id){
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('nav-'+id).classList.add('active');
+  
+  if(id === 'dashboard'){
+    $('main-dashboard').style.display = 'block';
+    $('main-api').style.display = 'none';
+  } else {
+    $('main-dashboard').style.display = 'none';
+    $('main-api').style.display = 'block';
+  }
+}
+
+function switchTab(el,id){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');$(id).classList.add('active');
+}
+
+function toast(msg,ok=true){
+  const t=$('toast');t.textContent=msg;t.style.borderLeftColor=ok?'var(--green)':'var(--red)';
+  t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000);
+}
+
+async function api(path,opts){
+  try{const r=await fetch(path,opts);return await r.json();}catch(e){toast('Request failed: '+e.message,false);return null;}
+}
+
+async function refresh(){
+  const [metrics,proxiesData,alerts,config]=await Promise.all([
+    api('/metrics'),api('/proxies'),api('/alerts'),api('/config')
+  ]);
+  if(metrics)renderStats(metrics);
+  if(proxiesData)renderProxies(proxiesData);
+  if(alerts)renderAlerts(Array.isArray(alerts)?alerts:[]);
+  if(config){$('cfg-interval').value=config.check_interval_seconds;$('cfg-timeout').value=config.request_timeout_ms;}
+}
+
+function renderStats(m){
+  const fr=(m.failure_rate*100).toFixed(1);
+  const frClass=m.failure_rate>=0.2?'down':m.failure_rate>0?'warn':'up';
+  $('stats').innerHTML=`
+    <div class="stat-card"><div class="label">Total Proxies</div><div class="value">${m.total_proxies}</div></div>
+    <div class="stat-card"><div class="label">Proxies Up</div><div class="value up">${m.proxies_up}</div></div>
+    <div class="stat-card"><div class="label">Proxies Down</div><div class="value down">${m.proxies_down}</div></div>
+    <div class="stat-card"><div class="label">Failure Rate</div><div class="value ${frClass}">${fr}%</div></div>
+    <div class="stat-card"><div class="label">Total Checks</div><div class="value">${m.total_checks}</div></div>
+    <div class="stat-card"><div class="label">Active Alerts</div><div class="value ${m.active_alerts>0?'down':''}">${m.active_alerts}</div></div>
+  `;
+}
+
+function renderProxies(data){
+  const p=data.proxies||[];
+  if(!p.length){$('proxy-table').innerHTML='<div class="empty">No proxies registered</div>';return;}
+  let html='<table><tr><th>ID</th><th>URL</th><th>Status</th><th>Checks</th><th>Uptime</th><th>Latency</th><th>Last Check</th></tr>';
+  for(const x of p){
+    const last=x.history&&x.history.length?x.history[x.history.length-1]:null;
+    const lat=last?last.latency_ms+'ms':'—';
+    const lc=x.last_checked_at?new Date(x.last_checked_at).toLocaleTimeString():'—';
+    html+=`<tr><td class="mono">${x.id}</td><td class="mono" style="max-width:250px;overflow:hidden;text-overflow:ellipsis">${x.url}</td>
+      <td><span class="pill ${x.status}">${x.status}</span></td>
+      <td>${x.total_checks}</td><td>${x.uptime_percentage.toFixed(1)}%</td><td>${lat}</td><td>${lc}</td></tr>`;
+  }
+  $('proxy-table').innerHTML=html+'</table>';
+}
+
+function renderAlerts(list){
+  if(!list.length){$('alert-table').innerHTML='<div class="empty">No alerts yet</div>';return;}
+  let html='<table><tr><th>Alert ID</th><th>Status</th><th>Failure Rate</th><th>Failed</th><th>Fired At</th><th>Resolved At</th></tr>';
+  for(const a of list){
+    const fr=(a.failure_rate*100).toFixed(1);
+    const ra=a.resolved_at?new Date(a.resolved_at).toLocaleString():'—';
+    html+=`<tr><td class="mono">${a.alert_id}</td><td><span class="pill ${a.status}">${a.status}</span></td>
+      <td>${fr}%</td><td>${a.failed_proxies}/${a.total_proxies}</td>
+      <td>${new Date(a.fired_at).toLocaleString()}</td><td>${ra}</td></tr>`;
+  }
+  $('alert-table').innerHTML=html+'</table>';
+}
+
+async function setConfig(){
+  const r=await api('/config',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({check_interval_seconds:+$('cfg-interval').value,request_timeout_ms:+$('cfg-timeout').value})});
+  if(r)toast('Config updated');refresh();
+}
+
+async function addProxies(){
+  const urls=$('proxy-urls').value.split('\n').map(u=>u.trim()).filter(Boolean);
+  if(!urls.length){toast('Enter at least one URL',false);return;}
+  const r=await api('/proxies',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({urls,replace:$('proxy-replace').checked})});
+  if(r){toast(r.message);$('proxy-urls').value='';}refresh();
+}
+
+async function deleteProxies(){
+  if(!confirm('Clear all proxies?'))return;
+  const r=await api('/proxies',{method:'DELETE'});
+  if(r)toast(r.message);refresh();
+}
+
+async function importGeonode(){
+  const limit=$('geo-limit').value;const proto=$('geo-proto').value;
+  toast('Fetching from Geonode...');
+  try{
+    const resp=await fetch(`https://proxylist.geonode.com/api/proxy-list?limit=${limit}&page=1&sort_by=lastChecked&sort_type=desc&protocols=${encodeURIComponent(proto)}`);
+    const data=await resp.json();
+    const urls=(data.data||[]).map(p=>{const s=(p.protocols&&p.protocols[0]||'http').toLowerCase();return `${s==='https'?'https':'http'}://${p.ip}:${p.port}`;});
+    if(!urls.length){toast('No proxies found',false);return;}
+    const r=await api('/proxies',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({urls,replace:$('geo-replace').checked})});
+    if(r)toast(`Imported: ${r.message}`);refresh();
+  }catch(e){toast('Geonode import failed: '+e.message,false);}
+}
+
+refresh();
+setInterval(()=>{countdown--;$('refresh-timer').textContent=`refreshing in ${countdown}s`;
+  if(countdown<=0){countdown=5;refresh();}},1000);
+</script>
+</body>
+</html>

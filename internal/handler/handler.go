@@ -3,6 +3,7 @@
 package handler
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,11 +16,16 @@ import (
 	"proxy-monitor/internal/store"
 )
 
+//go:embed dashboard.html
+var dashboardHTML []byte
+
 // NewRouter creates and returns a fully wired http.Handler.
 func NewRouter(s *store.Store, mon *monitor.Monitor) http.Handler {
 	h := &handlers{store: s, monitor: mon}
 
 	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /{$}", h.dashboard)
 
 	mux.HandleFunc("GET /health", h.health)
 
@@ -59,7 +65,9 @@ type handlers struct {
 func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%-6s %s", r.Method, r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/" {
+			w.Header().Set("Content-Type", "application/json")
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -90,6 +98,16 @@ func extractProxyID(rawURL string) string {
 		return rawURL[idx+1:]
 	}
 	return rawURL
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+func (h *handlers) dashboard(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(dashboardHTML)
 }
 
 // ---------------------------------------------------------------------------
