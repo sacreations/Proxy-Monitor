@@ -264,8 +264,16 @@ func (m *Monitor) dispatchNotifications(event string, alert *model.Alert) {
 	m.store.Mu.RUnlock()
 
 	payload := model.WebhookPayload{
-		Event:   event,
-		AlertID: alert.AlertID,
+		Event:          event,
+		AlertID:        alert.AlertID,
+		Status:         alert.Status,
+		FailureRate:    alert.FailureRate,
+		Threshold:      alert.Threshold,
+		TotalProxies:   alert.TotalProxies,
+		DownProxies:    alert.DownProxies,
+		FailedProxyIDs: alert.DownProxyIDs,
+		FiredAt:        alert.FiredAt,
+		ResolvedAt:     alert.ResolvedAt,
 	}
 
 	for _, wh := range webhooks {
@@ -451,7 +459,7 @@ func (m *Monitor) deliverWithRetry(label, endpoint string, body []byte, extraHea
 			}
 		}
 
-		req, err := http.NewRequest(http.MethodPut, endpoint, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			log.Printf("failed to create request: %v", err)
 			return

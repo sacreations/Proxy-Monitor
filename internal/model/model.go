@@ -109,8 +109,16 @@ type WebhookInput struct {
 
 // WebhookPayload is the exactly specified JSON body delivered to webhook receivers.
 type WebhookPayload struct {
-	Event   string `json:"event"`
-	AlertID string `json:"alert_id"`
+	Event          string     `json:"event"`
+	AlertID        string     `json:"alert_id"`
+	Status         string     `json:"status"`
+	FailureRate    float64    `json:"failure_rate"`
+	Threshold      float64    `json:"threshold"`
+	TotalProxies   int        `json:"total_proxies"`
+	DownProxies    int        `json:"down_proxies"`
+	FailedProxyIDs []string   `json:"failed_proxy_ids"`
+	FiredAt        time.Time  `json:"fired_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
 }
 
 // ---------------------------------------------------------------------------
