@@ -27,9 +27,10 @@ Zero external dependencies — pure Go standard library + `sync.RWMutex` for in-
 
 ## Bug Fix Journal
 
-A complete record of every non-trivial bug diagnosed and resolved during the competition.
+<details>
+<summary><strong>Click to expand — 8 bugs diagnosed and resolved during the competition</strong></summary>
 
----
+<br>
 
 ### 🐛 BUG-01 — ARM Build Failure (`stat /src/cmd/server: directory not found`)
 
@@ -208,6 +209,8 @@ Added:
 Also removed the spurious `content` top-level field and corrected color values from Go hex literals (`0xe74c3c`) to JSON-compatible decimal integers (`15158332`).
 
 ---
+
+</details>
 
 ## Project Structure
 
