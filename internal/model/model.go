@@ -78,18 +78,16 @@ type ProxyDetailResponse struct {
 // Alert represents an alert fired when the global failure rate breaches the
 // threshold. Only ONE alert can be active at a time.
 type Alert struct {
-	AlertID     string  `json:"alert_id"`
-	Status      string  `json:"status"` // "active", "resolved"
-	FailureRate float64 `json:"failure_rate"`
-	Threshold   float64 `json:"threshold"`
-	
-	// Internal tracking fields (not necessarily exposed directly, but good to keep)
-	TotalProxies   int        `json:"total_proxies,omitempty"`
-	DownProxies    int        `json:"down_proxies,omitempty"`
-	DownProxyIDs   []string   `json:"down_proxy_ids,omitempty"`
-	FiredAt        time.Time  `json:"fired_at,omitempty"`
-	ResolvedAt     *time.Time `json:"resolved_at,omitempty"`
-	Message        string     `json:"message,omitempty"`
+	AlertID        string     `json:"alert_id"`
+	Status         string     `json:"status"`
+	FailureRate    float64    `json:"failure_rate"`
+	Threshold      float64    `json:"threshold"`
+	TotalProxies   int        `json:"total_proxies"`
+	FailedProxies  int        `json:"failed_proxies"`
+	FailedProxyIDs []string   `json:"failed_proxy_ids"`
+	FiredAt        time.Time  `json:"fired_at"`
+	ResolvedAt     *time.Time `json:"resolved_at"`
+	Message        string     `json:"message"`
 }
 
 // ---------------------------------------------------------------------------
@@ -98,8 +96,8 @@ type Alert struct {
 
 // Webhook is a registered receiver for alert notifications.
 type Webhook struct {
-	ID  string `json:"id"`
-	URL string `json:"url"`
+	WebhookID string `json:"webhook_id"`
+	URL       string `json:"url"`
 }
 
 // WebhookInput is the expected JSON body for POST /webhooks.
@@ -107,18 +105,24 @@ type WebhookInput struct {
 	URL string `json:"url"`
 }
 
-// WebhookPayload is the exactly specified JSON body delivered to webhook receivers.
-type WebhookPayload struct {
-	Event          string     `json:"event"`
-	AlertID        string     `json:"alert_id"`
-	Status         string     `json:"status"`
-	FailureRate    float64    `json:"failure_rate"`
-	Threshold      float64    `json:"threshold"`
-	TotalProxies   int        `json:"total_proxies"`
-	DownProxies    int        `json:"down_proxies"`
-	FailedProxyIDs []string   `json:"failed_proxy_ids"`
-	FiredAt        time.Time  `json:"fired_at"`
-	ResolvedAt     *time.Time `json:"resolved_at"`
+// WebhookFiredPayload is the exact JSON body for alert.fired events (per spec Chapter 10).
+type WebhookFiredPayload struct {
+	Event          string    `json:"event"`
+	AlertID        string    `json:"alert_id"`
+	FiredAt        time.Time `json:"fired_at"`
+	FailureRate    float64   `json:"failure_rate"`
+	TotalProxies   int       `json:"total_proxies"`
+	FailedProxies  int       `json:"failed_proxies"`
+	FailedProxyIDs []string  `json:"failed_proxy_ids"`
+	Threshold      float64   `json:"threshold"`
+	Message        string    `json:"message"`
+}
+
+// WebhookResolvedPayload is the exact JSON body for alert.resolved events (per spec Chapter 10).
+type WebhookResolvedPayload struct {
+	Event      string     `json:"event"`
+	AlertID    string     `json:"alert_id"`
+	ResolvedAt *time.Time `json:"resolved_at"`
 }
 
 // ---------------------------------------------------------------------------

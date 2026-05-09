@@ -199,16 +199,16 @@ func (m *Monitor) evaluateGlobalAlert() {
 		if m.store.ActiveAlertID == "" {
 			alertID := generateAlertID()
 			now := time.Now().UTC()
-			alert := &model.Alert{
-				AlertID:      alertID,
-				Status:       model.AlertActive,
-				FailureRate:  failureRate,
-				Threshold:    model.FailureThreshold,
-				TotalProxies: total,
-				DownProxies:  downCount,
-				DownProxyIDs: failedIDs,
-				FiredAt:      now,
-				Message:      fmt.Sprintf("failure rate %.2f%% >= %.2f%% threshold", failureRate*100, model.FailureThreshold*100),
+				alert := &model.Alert{
+				AlertID:        alertID,
+				Status:         model.AlertActive,
+				FailureRate:    failureRate,
+				Threshold:      model.FailureThreshold,
+				TotalProxies:   total,
+				FailedProxies:  downCount,
+				FailedProxyIDs: failedIDs,
+				FiredAt:        now,
+				Message:        "Proxy pool failure rate exceeded threshold",
 			}
 			m.store.Alerts = append(m.store.Alerts, alert)
 			m.store.AlertsByID[alertID] = alert
@@ -219,8 +219,8 @@ func (m *Monitor) evaluateGlobalAlert() {
 			if a, ok := m.store.AlertsByID[m.store.ActiveAlertID]; ok {
 				a.FailureRate = failureRate
 				a.TotalProxies = total
-				a.DownProxies = downCount
-				a.DownProxyIDs = failedIDs
+				a.FailedProxies = downCount
+				a.FailedProxyIDs = failedIDs
 			}
 		}
 	} else {
@@ -230,8 +230,8 @@ func (m *Monitor) evaluateGlobalAlert() {
 				a.Status = model.AlertResolved
 				a.FailureRate = failureRate
 				a.TotalProxies = total
-				a.DownProxies = downCount
-				a.DownProxyIDs = failedIDs
+				a.FailedProxies = downCount
+				a.FailedProxyIDs = failedIDs
 				a.ResolvedAt = &now
 				log.Printf("✅ ALERT RESOLVED alert=%s rate=%.2f%%", m.store.ActiveAlertID, failureRate*100)
 				go m.dispatchNotifications(model.EventAlertResolved, a)
@@ -263,37 +263,40 @@ func (m *Monitor) dispatchNotifications(event string, alert *model.Alert) {
 	}
 	m.store.Mu.RUnlock()
 
-	payload := model.WebhookPayload{
-		Event:          event,
-		AlertID:        alert.AlertID,
-		Status:         alert.Status,
-		FailureRate:    alert.FailureRate,
-		Threshold:      alert.Threshold,
-		TotalProxies:   alert.TotalProxies,
-		DownProxies:    alert.DownProxies,
-		FailedProxyIDs: alert.DownProxyIDs,
-		FiredAt:        alert.FiredAt,
-		ResolvedAt:     alert.ResolvedAt,
+	// Build event-specific payload per spec Chapter 10
+	var body []byte
+	if event == model.EventAlertFired {
+		p := model.WebhookFiredPayload{
+			Event:          event,
+			AlertID:        alert.AlertID,
+			FiredAt:        alert.FiredAt,
+			FailureRate:    alert.FailureRate,
+			TotalProxies:   alert.TotalProxies,
+			FailedProxies:  alert.FailedProxies,
+			FailedProxyIDs: alert.FailedProxyIDs,
+			Threshold:      alert.Threshold,
+			Message:        alert.Message,
+		}
+		body, _ = json.Marshal(p)
+	} else {
+		p := model.WebhookResolvedPayload{
+			Event:      event,
+			AlertID:    alert.AlertID,
+			ResolvedAt: alert.ResolvedAt,
+		}
+		body, _ = json.Marshal(p)
 	}
 
 	for _, wh := range webhooks {
-		go m.deliverWebhook(wh.URL, payload)
+		go m.deliverWebhook(wh.URL, body)
 	}
 	for _, ig := range integrations {
 		go m.deliverIntegration(ig, event, alert)
 	}
 }
 
-func (m *Monitor) deliverWebhook(url string, payload model.WebhookPayload) {
-	body, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("webhook marshal error: %v", err)
-		return
-	}
-	extraHeaders := map[string]string{
-		"X-ProxyMaze-Event": payload.Event,
-	}
-	m.deliverWithRetry("webhook", url, body, extraHeaders)
+func (m *Monitor) deliverWebhook(url string, body []byte) {
+	m.deliverWithRetry("webhook", url, body, nil)
 }
 
 func (m *Monitor) deliverIntegration(ig *model.Integration, event string, alert *model.Alert) {
@@ -322,7 +325,7 @@ func (m *Monitor) deliverIntegration(ig *model.Integration, event string, alert 
 // ---------------------------------------------------------------------------
 
 func isTransient(code int) bool {
-	return code == 429 || code == 500 || code == 502 || code == 503 || code == 504
+	return code == 500 || code == 502 || code == 503 || code == 504
 }
 
 func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model.Alert) {
@@ -362,7 +365,7 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 					},
 					{
 						"type": "mrkdwn",
-						"text": fmt.Sprintf("*Failed Proxies*\n%d/%d", alert.DownProxies, alert.TotalProxies),
+						"text": fmt.Sprintf("*Failed Proxies*\n%d/%d", alert.FailedProxies, alert.TotalProxies),
 					},
 					{
 						"type": "mrkdwn",
@@ -387,7 +390,7 @@ func (m *Monitor) deliverSlack(ig *model.Integration, event string, alert *model
 				Text:  alert.Message,
 				Fields: []model.SlackField{
 					{Title: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Short: true},
-					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.DownProxies, alert.TotalProxies), Short: true},
+					{Title: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Short: true},
 					{Title: "Event", Value: event, Short: true},
 				},
 				Footer: "ProxyMaze Background Monitor",
@@ -428,7 +431,7 @@ func (m *Monitor) deliverDiscord(ig *model.Integration, event string, alert *mod
 					{Name: "Alert ID", Value: alert.AlertID, Inline: true},
 					{Name: "Status", Value: alert.Status, Inline: true},
 					{Name: "Failure Rate", Value: fmt.Sprintf("%.2f%%", alert.FailureRate*100), Inline: true},
-					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.DownProxies, alert.TotalProxies), Inline: true},
+					{Name: "Failed Proxies", Value: fmt.Sprintf("%d/%d", alert.FailedProxies, alert.TotalProxies), Inline: true},
 				},
 				Footer:    &model.DiscordFooter{Text: "ProxyMaze Background Monitor"},
 				Timestamp: time.Now().UTC().Format(time.RFC3339),

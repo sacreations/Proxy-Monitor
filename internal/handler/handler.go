@@ -318,8 +318,8 @@ func (h *handlers) webhookCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := fmt.Sprintf("wh_%d", time.Now().UnixNano())
-	wh := &model.Webhook{ID: id, URL: input.URL}
+	id := fmt.Sprintf("wh-%d", time.Now().UnixNano())
+	wh := &model.Webhook{WebhookID: id, URL: input.URL}
 
 	h.store.Mu.Lock()
 	h.store.Webhooks[id] = wh
