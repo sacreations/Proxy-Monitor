@@ -6,24 +6,6 @@ Zero external dependencies — pure Go standard library + `sync.RWMutex` for in-
 
 ---
 
-## Final Score — ProxyMaze '26
-
-| Phase | Criteria | Score |
-|---|---|---|
-| Phase 1 — Bootstrap | Health + Config | 10 / 10 |
-| Phase 2 — Proxy Ingestion | Ingest, Poll, Fields | 30 / 30 |
-| Phase 3 — Single Failure | Detect, No False Alert, Recover | 30 / 30 |
-| Phase 4 — Threshold Alerts | Breach, Payload, Webhooks, Retry, Dedup, Consistency | 90 / 90 |
-| Phase 5 — Alert Resolution | Recovery, Resolved Webhook | 20 / 20 |
-| Phase 6 — Re-breach Lifecycle | New ID, Ordering | 30 / 30 |
-| Phase 7 — Pool Ops | Replace, Delete, History, Metrics | 25 / 25 |
-| Bonus B1 — Slack Block Kit | Attachment-format delivery | +10 |
-| Bonus B2 — Discord Embeds | Embed-format delivery | +10 |
-| **Total** | | **255–270 / 270** |
-
-**Passing score: 186** ✅
-
----
 
 ## Bug Fix Journal
 
